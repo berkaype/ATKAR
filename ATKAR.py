@@ -9,9 +9,9 @@ st.set_page_config(layout="wide",
                    page_icon="💧" # Buraya istediğiniz emojiyi veya bir resim URL'sini ekleyebilirsiniz
                    )
 
-st.title("Atıksu Arıtma Tesisleri Karşılaştırma Analizi")
+st.title("Atıksu Arıtma Tesisleri Karşılaştırma Platformu")
 
-st.info("Sol üstteki 'Browse files' veya 'Gözat' butonuyla **CSV dosyanızı seçip yükleyin**.")
+st.info("Aşağıdaki 'Browse files' veya 'Gözat' butonuyla **CSV dosyanızı seçip yükleyin**.")
 
 # Dosya yükleme arayüzü
 uploaded_file = st.file_uploader("CSV dosyasını yükleyin", type=["csv"])
