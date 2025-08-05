@@ -1,0 +1,204 @@
+import streamlit as st
+import pandas as pd
+from datetime import datetime # Tarih girişleri için datetime modülünü içeri aktar
+import plotly.express as px # Plotly kütüphanesini içeri aktar
+import plotly.graph_objects as go # Plotly'nin düşük seviye grafik nesnelerini içeri aktar
+
+st.set_page_config(layout="wide") # Geniş düzen kullanarak daha iyi görselleştirme sağlar
+
+st.title("Atıksu Arıtma Tesisleri Karşılaştırma")
+
+st.info("Sol üstteki 'Browse files' veya 'Gözat' butonuyla **CSV dosyanızı seçip yükleyin**.")
+
+uploaded_file = st.file_uploader("CSV dosyasını yükleyin", type=["csv"])
+if uploaded_file:
+    # CSV dosyasını okumak için farklı kodlamaları ve ayırıcıları dener
+    encodings = ['utf-8', 'latin1', 'cp1254']
+    separators = [',', ';', '\t']
+    df = None
+    for enc in encodings:
+        for sep in separators:
+            try:
+                # Dosyanın tamamını oku
+                uploaded_file.seek(0)
+                df = pd.read_csv(uploaded_file, encoding=enc, sep=sep, engine='python')
+                df.columns = df.columns.map(str).str.strip() # Sütun adlarını temizle
+                break # Başarılı olursa, ayırıcı döngüsünden çık
+            except Exception:
+                df = None
+        if df is not None:
+            break # Başarılı olursa, kodlama döngüsünden çık
+
+    if df is None:
+        st.error("Dosya okunamadı. Lütfen ayırıcıyı ve formatı kontrol edin.")
+        st.stop()
+
+    # İlk sütunun her zaman tarih sütunu olduğunu varsarız
+    date_col = df.columns[0]
+    
+    try:
+        df['Tarih'] = pd.to_datetime(df[date_col], dayfirst=True, errors='coerce')
+    except Exception as e:
+        st.error(f"Tarih kolonu parse edilemedi. Lütfen ilk kolonda geçerli tarih formatı olduğundan emin olun: {e}")
+        st.stop()
+
+    df.dropna(subset=['Tarih'], inplace=True)
+    df.set_index('Tarih', inplace=True)
+
+    # Tarih aralığı seçimi için sidebar kullan
+    min_date = df.index.min().date() if not df.empty else datetime.now().date()
+    max_date = df.index.max().date() if not df.empty else datetime.now().date()
+
+    st.sidebar.subheader("Tarih Aralığı Seçimi")
+    start_date = st.sidebar.date_input("Başlangıç Tarihi", value=min_date, min_value=min_date, max_value=max_date)
+    end_date = st.sidebar.date_input("Bitiş Tarihi", value=max_date, min_value=min_date, max_value=max_date)
+
+    if start_date > end_date:
+        st.error("Başlangıç tarihi bitiş tarihinden sonra olamaz. Lütfen tarihleri kontrol edin.")
+        st.stop()
+    
+    # Seçilen tarih aralığına göre DataFrame'i filtrele
+    df = df.loc[start_date.strftime('%Y-%m-%d'):end_date.strftime('%Y-%m-%d')]
+
+    if df.empty:
+        st.warning("Seçilen tarih aralığında veri bulunamadı. Lütfen tarih aralığını ayarlayın.")
+        st.stop()
+
+    # Ondalık ayırıcı seçimi
+    decimal_separator = st.radio(
+        "Ondalık Ayırıcıyı Seçin",
+        (".", ","),
+        help="CSV dosyanızdaki ondalık sayıların ayırıcısını seçin (örn. 1.23 için '.' veya 1,23 için ',')."
+    )
+
+    # Orijinal tarih sütunu dışındaki tüm sütunları veri sütunları olarak tanımla
+    data_cols = [c for c in df.columns if c != date_col]
+
+    # Sütun başlıklarından benzersiz tesis adlarını çıkarır
+    # Tesis adlarının sütun adının ilk kelimesi olduğunu varsarız (örn: "Ataköy I Proses Debisi" -> "Ataköy")
+    plants = sorted({col.split()[0] for col in data_cols})
+    
+    # Çoklu tesis seçimi
+    selected_plants = st.multiselect("Tesisleri seçin", plants)
+
+    # Seçilen tesislere ait parametreleri filtrele
+    # Parametre isimleri tesis adlarıyla birlikte gösterilecek
+    available_params_for_selection = []
+    if selected_plants:
+        for plant_name in selected_plants:
+            # Seçilen tesis adına sahip tüm sütunları ekle
+            available_params_for_selection.extend([c for c in data_cols if c.startswith(plant_name)])
+    
+    # Tekrar edenleri kaldır ve sırala
+    available_params_for_selection = sorted(list(set(available_params_for_selection)))
+
+    # Kullanıcının seçebileceği parametreler (tesis adlarıyla birlikte)
+    selected_params = st.multiselect("Parametreleri seçin", available_params_for_selection)
+
+    # Yeni kısım: Her parametre için grafik tipi seçimi
+    chart_types_for_params = {}
+    if selected_params:
+        st.subheader("Grafik Tipi Seçimi")
+        for param in selected_params:
+            chart_type = st.selectbox(
+                f"'{param}' için grafik tipi seçin",
+                ("Çizgi (Line)", "Çubuk (Bar)", "Nokta (Scatter)"),
+                key=f"chart_type_{param}" # Benzersiz anahtar
+            )
+            chart_types_for_params[param] = chart_type
+
+    # Analiz için zaman dilimini seç
+    granularity = st.radio("Zaman dilimi", ("Günlük", "Aylık", "Mevsimlik", "Yıllık"))
+
+    if selected_params and chart_types_for_params: # Parametreler ve grafik tipleri seçilmiş olmalı
+        # Seçilen parametreleri içeren DataFrame'i oluştur
+        df_sel = df[selected_params].copy() # Değişikliklerin orijinal DataFrame'i etkilememesi için kopyala
+        
+        # Seçilen parametre sütunlarını sayısal türe dönüştür
+        # Hata durumunda (örn. sayısal olmayan karakterler) NaN yapar
+        for col in df_sel.columns:
+            # Sütunu string'e çevirerek replace metodunu güvenle kullanabiliriz.
+            # Ardından ondalık ayırıcıyı standardize et (virgülse noktaya çevir)
+            if decimal_separator == ',':
+                df_sel[col] = df_sel[col].astype(str).str.replace(',', '.', regex=False)
+            
+            # Şimdi sayısal türe dönüştür. Hata durumunda NaN yapar.
+            df_sel[col] = pd.to_numeric(df_sel[col], errors='coerce')
+
+        # Boş değerleri işleme stratejisi seçimi
+        missing_data_strategy = st.radio(
+            "Boş (NaN) değerleri nasıl işleyelim?",
+            ("Enterpole Et (Interpolate)", "Sıfır değerleri grafikte bağlama")
+        )
+
+        if missing_data_strategy == "Enterpole Et (Interpolate)":
+            # Doğrusal interpolasyon ile boş değerleri doldur, başlangıç ve bitişteki NaN'ları da işler
+            df_sel.interpolate(method='linear', limit_direction='both', inplace=True)
+            # Interpolasyondan sonra hala NaN varsa (örn. tek bir değer varsa veya başta/sonda NaN varsa), sıfırla
+            df_sel.fillna(0, inplace=True)
+        # "Sıfır değerleri grafikte bağlama" seçeneği için özel bir işlem yok, NaN'lar olduğu gibi kalır ve atlanır.
+        # Pandas'ın resample().mean() ve line_chart() fonksiyonları NaN değerleri otomatik olarak atlar.
+
+        # Tüm değerleri NaN olan sütunları düşür (bu, boş sütunların ortalama hesaplamasını engeller)
+        # Bu adım, NaN'lar işlendikten sonra gelmeli.
+        df_sel.dropna(axis=1, how='all', inplace=True)
+        
+        if df_sel.empty:
+            st.warning("Seçilen filtreler ve boş değer işleme stratejisi sonucunda analiz edilebilecek geçerli veri bulunamadı.")
+            st.stop()
+
+        # Seçilen zaman dilimine göre veriyi yeniden örnekle
+        if granularity == "Günlük":
+            res = df_sel.resample('D').mean()
+        elif granularity == "Aylık":
+            res = df_sel.resample('M').mean()
+        elif granularity == "Yıllık":
+            res = df_sel.resample('Y').mean()
+        else: # Mevsimlik
+            seasons = {
+                12: 'Kış', 1: 'Kış', 2: 'Kış',
+                3: 'İlkbahar', 4: 'İlkbahar', 5: 'İlkbahar',
+                6: 'Yaz', 7: 'Yaz', 8: 'Yaz',
+                9: 'Sonbahar', 10: 'Sonbahar', 11: 'Sonbahar'
+            }
+            # Mevsimlik analiz için DataFrame'i kopyala ve 'Season' sütununu ekle
+            df_sel_season = df_sel.copy() 
+            df_sel_season['Season'] = df_sel_season.index.month.map(seasons)
+            res = df_sel_season.groupby('Season').mean()
+
+        # Özet Tabloyu Göster
+        st.subheader("Özet Tablo")
+        st.dataframe(res)
+
+        # Grafiği Plotly ile Göster
+        st.subheader("Grafik")
+        
+        # Plotly Graph Objects kullanarak figürü oluştur
+        fig = go.Figure()
+
+        # Her seçilen parametre için seçilen grafik tipine göre iz ekle
+        for param in res.columns: # res.columns, seçilen ve işlenmiş parametrelerdir
+            chart_type = chart_types_for_params.get(param, "Çizgi (Line)") # Varsayılan olarak çizgi
+
+            if chart_type == "Çizgi (Line)":
+                fig.add_trace(go.Scatter(x=res.index, y=res[param], mode='lines', name=param))
+            elif chart_type == "Çubuk (Bar)":
+                fig.add_trace(go.Bar(x=res.index, y=res[param], name=param))
+            elif chart_type == "Nokta (Scatter)":
+                fig.add_trace(go.Scatter(x=res.index, y=res[param], mode='markers', name=param))
+
+        # Grafik düzenini güncelle
+        fig.update_layout(
+            title_text="Seçilen Parametrelerin Zaman Serisi Grafiği",
+            xaxis_title="Tarih" if granularity != "Mevsimlik" else "Mevsim", # X ekseni başlığını dinamik yap
+            yaxis_title="Değer",
+            hovermode="x unified" # Fare imleciyle tüm serilerde aynı anda değerleri göster
+        )
+        
+        # Grafiği interaktif hale getir ve container genişliğini kullan
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("Lütfen analiz etmek için en az bir parametre seçin.")
+
+
+#streamlit run ATKAR.py
