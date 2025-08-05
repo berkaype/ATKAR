@@ -4,7 +4,7 @@ from datetime import datetime # Tarih girişleri için datetime modülünü içe
 import plotly.graph_objects as go # Plotly'nin düşük seviye grafik nesnelerini içeri aktar
 
 # Sayfa düzenini geniş olarak ayarla
-st.set_page_config(layout="wide") 
+st.set_page_config(layout="wide", page_title="ATKAR - Atıksu Arıtma Tesisleri Karşılaştırma Platformu")
 
 st.title("Atıksu Arıtma Tesisleri Karşılaştırma Analizi")
 
