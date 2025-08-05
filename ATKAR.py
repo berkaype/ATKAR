@@ -179,10 +179,10 @@ if uploaded_file:
         if granularity == "Günlük":
             res = df_sel.resample('D').mean()
         elif granularity == "Aylık":
-            res = df_sel.resample('M').mean()
+            res = df_sel.resample('ME').mean()
             res.index = res.index.strftime('%Y-%m') # X eksenini daha okunaklı yap
         elif granularity == "Yıllık":
-            res = df_sel.resample('Y').mean()
+            res = df_sel.resample('YE').mean()
             res.index = res.index.strftime('%Y') # X eksenini daha okunaklı yap
         else: # Mevsimlik
             seasons = {
