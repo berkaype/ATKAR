@@ -73,7 +73,7 @@ if uploaded_file:
     # Ondalık ayırıcı seçimi
     decimal_separator = st.sidebar.radio(
         "Ondalık Ayırıcıyı Seçin",
-        (".", ","),
+        (",", "."),
         help="CSV dosyanızdaki ondalık sayıların ayırıcısını seçin (örn. 1.23 için '.' veya 1,23 için ',')."
     )
 
@@ -230,7 +230,7 @@ if uploaded_file:
 
         # Grafik düzenini dinamik olarak oluştur
         layout_options = {
-            'title_text': "Seçilen Parametrelerin Zaman Serisi Grafiği",
+            'title_text': "ATKAR - Zaman Serisi Grafiği",
             'xaxis_title': "Tarih" if granularity != "Mevsimlik" else "Mevsim",
             'hovermode': "x unified",
             'legend': {'orientation': 'h', 'yanchor': 'bottom', 'y': 1.02, 'xanchor': 'right', 'x': 1},
@@ -263,7 +263,7 @@ if uploaded_file:
                 'side': 'right',
                 'anchor': 'free',  # Serbest konumlandırma
                 'position': 1.0,
-                'shift': 80, # Daha sağa kaydır (8% padding)
+                'shift': 80, # Daha sağa kaydır
                 'tickfont': {'color': '#347C17'},
                 'automargin': True
             }
