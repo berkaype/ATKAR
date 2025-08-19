@@ -230,7 +230,7 @@ if uploaded_file:
 
         # Grafik düzenini dinamik olarak oluştur
         layout_options = {
-            'title_text': "Seçilen Parametrelerin Zaman Serisi Grafiği",
+            'title_text': "ATKAR - Zaman Serisi Grafiği",
             'xaxis_title': "Tarih" if granularity != "Mevsimlik" else "Mevsim",
             'hovermode': "x unified",
             'legend': {'orientation': 'h', 'yanchor': 'bottom', 'y': 1.02, 'xanchor': 'right', 'x': 1},
