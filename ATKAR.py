@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error
@@ -17,25 +18,131 @@ st.set_page_config(layout="wide",
 # --- Ana Başlık ---
 st.title("Atıksu Arıtma Tesisleri Karşılaştırma ve Tahmin Platformu")
 
-# --- Fonksiyonlar (Model Eğitimi ve Tahmin) ---
-# Model eğitimi ve kaynakları önbelleğe alarak performansı artırıyoruz.
-# Veri seti, parametre adı ve time_step değişmediği sürece bu fonksiyon tekrar çalışmaz.
+# --- Yardımcı Fonksiyonlar ---
+def detect_outliers_3sigma(series):
+    """3 sigma yöntemi ile outlier'ları tespit eder"""
+    mean = series.mean()
+    std = series.std()
+    outliers = series[(series < (mean - 3*std)) | (series > (mean + 3*std))]
+    return outliers
+
+def remove_outliers_3sigma(df, columns):
+    """3 sigma yöntemi ile outlier'ları kaldırır"""
+    df_cleaned = df.copy()
+    for col in columns:
+        if col in df_cleaned.columns:
+            mean = df_cleaned[col].mean()
+            std = df_cleaned[col].std()
+            df_cleaned.loc[(df_cleaned[col] < (mean - 3*std)) | 
+                          (df_cleaned[col] > (mean + 3*std)), col] = np.nan
+    return df_cleaned
+
+def create_yearly_subplots(df, selected_params, years, chart_types_for_params, opacity_values, limit_values, show_labels, yaxis_assignments):
+    """Seçilen yıllar için alt alta grafik oluşturur"""
+    fig = make_subplots(
+        rows=len(years), 
+        cols=1,
+        subplot_titles=[f"Yıl: {year}" for year in years],
+        shared_xaxes=False,
+        vertical_spacing=0.08,
+        specs=[[{"secondary_y": True}] for _ in years]  # Her subplot için ikincil y ekseni
+    )
+    
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
+    
+    for i, year in enumerate(years):
+        year_data = df[df.index.year == year]
+        if len(year_data) == 0:
+            continue
+            
+        for j, param in enumerate(selected_params):
+            if param not in year_data.columns:
+                continue
+                
+            chart_type = chart_types_for_params.get(param, "Çizgi (Line)")
+            opacity = opacity_values.get(param, 1.0)
+            color = colors[j % len(colors)]
+            target_yaxis = yaxis_assignments.get(param, 'y')
+            secondary_y = target_yaxis == 'y2'
+            
+            trace_args = {
+                'x': year_data.index,
+                'y': year_data[param],
+                'name': f"{param} ({year})",
+                'opacity': opacity,
+                'line': dict(color=color),
+                'showlegend': True
+            }
+            
+            if show_labels:
+                trace_args['mode'] = 'lines+markers+text'
+                trace_args['text'] = [f"{val:.1f}" if not pd.isna(val) else "" for val in year_data[param]]
+                trace_args['textposition'] = 'top center'
+                trace_args['textfont'] = dict(size=8)
+            else:
+                trace_args['mode'] = 'lines'
+                
+            if chart_type == "Çizgi (Line)" or chart_type == "Nokta (Scatter)":
+                fig.add_trace(go.Scatter(**trace_args), row=i+1, col=1, secondary_y=secondary_y)
+            elif chart_type == "Çubuk (Bar)":
+                fig.add_trace(go.Bar(**trace_args), row=i+1, col=1, secondary_y=secondary_y)
+            
+            # Limit değeri çizgisi ekle (doğru eksene)
+            if param in limit_values and limit_values[param] is not None:
+                # Y ekseni referansını belirle
+                if len(years) == 1:
+                    yref = 'y2' if secondary_y else 'y'
+                else:
+                    yref = f'y{2*(i+1)}' if secondary_y else f'y{2*i+1}' if i > 0 else 'y'
+                
+                # Limit çizgisini ekle
+                fig.add_shape(
+                    type="line",
+                    x0=year_data.index.min(),
+                    y0=limit_values[param],
+                    x1=year_data.index.max(),
+                    y1=limit_values[param],
+                    line=dict(color="red", width=2, dash="dash"),
+                    yref=yref,
+                    row=i+1,
+                    col=1
+                )
+                
+                # Annotation ekle
+                fig.add_annotation(
+                    x=year_data.index.mean(),
+                    y=limit_values[param],
+                    text=f"Limit: {limit_values[param]}",
+                    showarrow=False,
+                    yshift=10,
+                    font=dict(color="red", size=10),
+                    yref=yref,
+                    row=i+1,
+                    col=1
+                )
+    
+    fig.update_layout(
+        height=400*len(years),
+        title_text="Yıllık Karşılaştırma Grafikleri",
+        showlegend=True
+    )
+    
+    return fig
+
+# --- Model Eğitimi ve Tahmin Fonksiyonları ---
 @st.cache_resource
 def train_and_predict_lstm(_df_cleaned, param_name, time_step=60):
     """
     Belirtilen parametre için bir LSTM modeli eğitir ve tahmin yapar.
     Modeli ve ölçekleyiciyi döndürür.
     """
-    # 1. Veri Hazırlığı
     series = _df_cleaned[param_name].dropna()
-    if len(series) < time_step + 10: # Modelin eğitilmesi için minimum veri
+    if len(series) < time_step + 10:
         return None, None, f"'{param_name}' parametresi için yeterli veri bulunmuyor (en az {time_step + 10} gün gerekli)."
 
-    # Veriyi 0-1 arasına ölçekle
     scaler = MinMaxScaler(feature_range=(0, 1))
     scaled_data = scaler.fit_transform(series.values.reshape(-1, 1))
 
-    # Eğitim verisi oluştur
     X, y = [], []
     for i in range(len(scaled_data) - time_step):
         X.append(scaled_data[i:(i + time_step), 0])
@@ -44,7 +151,6 @@ def train_and_predict_lstm(_df_cleaned, param_name, time_step=60):
     X_train, y_train = np.array(X), np.array(y)
     X_train = np.reshape(X_train, (X_train.shape[0], X_train.shape[1], 1))
 
-    # 2. LSTM Modeli Oluşturma ve Eğitme
     model = Sequential([
         LSTM(50, return_sequences=True, input_shape=(time_step, 1)),
         LSTM(50, return_sequences=False),
@@ -52,9 +158,8 @@ def train_and_predict_lstm(_df_cleaned, param_name, time_step=60):
         Dense(1)
     ])
     model.compile(optimizer='adam', loss='mean_squared_error')
-    model.fit(X_train, y_train, batch_size=1, epochs=10, verbose=0) # verbose=0 arayüzü temiz tutar
+    model.fit(X_train, y_train, batch_size=1, epochs=10, verbose=0)
 
-    # Modelin eğitim verisi üzerindeki performansını hesapla
     train_predict = model.predict(X_train)
     train_predict = scaler.inverse_transform(train_predict)
     y_train_inv = scaler.inverse_transform(y_train.reshape(-1, 1))
@@ -78,20 +183,25 @@ def make_future_forecast(model, scaler, last_data, time_step, forecast_days):
     forecast_values = scaler.inverse_transform(np.array(forecast_list).reshape(-1, 1)).flatten()
     return forecast_values
 
-
-# --- Veri Yükleme (Uygulama Genelinde) ---
+# --- Veri Yükleme ---
 st.info("Başlamak için lütfen CSV formatındaki zaman serisi verilerinizi yükleyin.")
 uploaded_file = st.file_uploader("CSV dosyasını yükleyin", type=["csv"], key="data_uploader")
 
 if uploaded_file:
     @st.cache_data
     def load_data(file):
-        # ... (Önceki koddaki veri yükleme fonksiyonu aynı) ...
-        encodings = ['utf-8', 'latin1', 'cp1254']; separators = [',', ';', '\t']; df = None
+        encodings = ['utf-8', 'latin1', 'cp1254']
+        separators = [',', ';', '\t']
+        df = None
         for enc in encodings:
             for sep in separators:
-                try: file.seek(0); df = pd.read_csv(file, encoding=enc, sep=sep, engine='python'); df.columns = df.columns.map(str).str.strip(); return df
-                except Exception: continue
+                try:
+                    file.seek(0)
+                    df = pd.read_csv(file, encoding=enc, sep=sep, engine='python')
+                    df.columns = df.columns.map(str).str.strip()
+                    return df
+                except Exception:
+                    continue
         return None
 
     df_initial = load_data(uploaded_file)
@@ -107,17 +217,24 @@ if uploaded_file:
         df_initial.set_index('Tarih', inplace=True)
         df_initial.sort_index(inplace=True)
     except Exception as e:
-        st.error(f"Tarih sütunu işlenemedi: {e}"); st.stop()
+        st.error(f"Tarih sütunu işlenemedi: {e}")
+        st.stop()
 
-    decimal_separator = st.sidebar.radio("Verideki Ondalık Ayırıcı", (",", "."))
+    # Sidebar ayarları
+    st.sidebar.header("Veri İşleme Ayarları")
+    
+    decimal_separator = st.sidebar.radio("Verideki Ondalık Ayırıcı", (",", "."))  # Varsayılan olarak virgül
     data_cols = [c for c in df_initial.columns if c != date_col]
     df_cleaned = df_initial[data_cols].copy()
+    
     for col in df_cleaned.columns:
         if decimal_separator == ',':
             df_cleaned[col] = df_cleaned[col].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
         df_cleaned[col] = pd.to_numeric(df_cleaned[col], errors='coerce')
 
-    missing_data_strategy = st.sidebar.radio("Boş (NaN) Değerleri Nasıl İşleyelim?", ("Enterpole Et (Doğrusal Doldur)", "Boş Bırak"))
+    # Outlier işleme seçeneği kaldırıldı sidebar'dan
+    
+    missing_data_strategy = st.sidebar.radio("Boş (NaN) Değerleri Nasıl İşleyelim?", ("Boş Bırak", "Enterpole Et (Doğrusal Doldur)"))  # Varsayılan olarak "Boş Bırak"
     if missing_data_strategy == "Enterpole Et (Doğrusal Doldur)":
         df_cleaned.interpolate(method='linear', limit_direction='both', inplace=True)
 
@@ -134,7 +251,8 @@ if uploaded_file:
         end_date = st.sidebar.date_input("Bitiş Tarihi", value=max_date, min_value=min_date, max_value=max_date, key="end_date_tab1")
 
         if start_date > end_date:
-            st.error("Başlangıç tarihi bitiş tarihinden sonra olamaz."); st.stop()
+            st.error("Başlangıç tarihi bitiş tarihinden sonra olamaz.")
+            st.stop()
         
         df = df_cleaned.loc[start_date.strftime('%Y-%m-%d'):end_date.strftime('%Y-%m-%d')]
 
@@ -144,34 +262,226 @@ if uploaded_file:
         available_params = sorted([c for c in data_cols if any(c.startswith(p) for p in selected_plants)])
         selected_params = st.multiselect("Grafikte Gösterilecek Parametreleri Seçin", available_params, key="params_tab1")
         
-        # --- Orijinal Detaylı Grafik Kodunuz Buraya Geri Geldi ---
         if selected_params:
+            # Grafik görüntüleme seçenekleri
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                show_labels = st.checkbox("Veri Değerlerini Göster", value=False)
+                yearly_view = st.checkbox("Yıllık Alt Alta Görünüm", value=False)
+            
+            with col2:
+                show_limit_lines = st.checkbox("Limit Değer Çizgilerini Göster", value=False)
+                remove_outliers = st.checkbox("3 Sigma Outlier Kaldır", value=False)
+                
+            with col3:
+                # Outlier işlemi
+                if remove_outliers:
+                    # Outlier'ları kaldır
+                    df_for_display = remove_outliers_3sigma(df, selected_params)
+                else:
+                    df_for_display = df
+            
             st.subheader("Grafik Özelleştirme")
             chart_types_for_params, yaxis_assignments, opacity_values = {}, {}, {}
             col1, col2, col3 = st.columns(3)
+            
             with col1:
-                # ... (Kısalık adına gizlendi, orijinal kodunuzdaki grafik tipi seçimi)
-                 for param in selected_params: chart_types_for_params[param] = st.selectbox(f"'{param}' tipi", ("Çizgi (Line)", "Çubuk (Bar)", "Nokta (Scatter)"), key=f"chart_type_{param}")
+                st.write("**Grafik Tipi**")
+                for param in selected_params:
+                    chart_types_for_params[param] = st.selectbox(
+                        f"'{param}' tipi", 
+                        ("Çizgi (Line)", "Çubuk (Bar)", "Nokta (Scatter)"), 
+                        key=f"chart_type_{param}"
+                    )
+            
             with col2:
-                # ... (Kısalık adına gizlendi, orijinal kodunuzdaki Y ekseni ataması)
-                for param in selected_params: 
-                    axis_choice = st.selectbox(f"'{param}' ekseni", ('Birincil Eksen (Sol)', 'İkincil Eksen (Sağ)'), key=f"yaxis_{param}")
+                st.write("**Y Ekseni**")
+                for param in selected_params:
+                    axis_choice = st.selectbox(
+                        f"'{param}' ekseni", 
+                        ('Birincil Eksen (Sol)', 'İkincil Eksen (Sağ)'), 
+                        key=f"yaxis_{param}"
+                    )
                     yaxis_assignments[param] = 'y2' if 'İkincil' in axis_choice else 'y'
+            
             with col3:
-                # ... (Kısalık adına gizlendi, orijinal kodunuzdaki opasite ayarı)
-                for param in selected_params: opacity_values[param] = st.slider(f"'{param}' opasite", 0.1, 1.0, 1.0, 0.1, key=f"opacity_{param}")
+                st.write("**Opaklık**")
+                for param in selected_params:
+                    opacity_values[param] = st.slider(
+                        f"'{param}' opaklık", 
+                        0.1, 1.0, 1.0, 0.1, 
+                        key=f"opacity_{param}"
+                    )
+
+            # Limit değerleri girişi
+            limit_values = {}
+            if show_limit_lines:
+                st.subheader("Limit Değerleri")
+                limit_cols = st.columns(3)
+                for i, param in enumerate(selected_params):
+                    with limit_cols[i % 3]:
+                        # Hangi eksende olduğunu göster
+                        axis_info = "Birincil" if yaxis_assignments.get(param, 'y') == 'y' else "İkincil"
+                        limit_val = st.number_input(f"{param} için limit ({axis_info} Eksen):", value=None, key=f"limit_{param}")
+                        limit_values[param] = limit_val
+
+            # Yıllık görünüm için yıl seçimi
+            if yearly_view:
+                available_years = sorted(df_for_display.index.year.unique())
+                selected_years = st.multiselect("Gösterilecek Yılları Seçin:", available_years, default=available_years[-2:] if len(available_years) > 1 else available_years)
             
             st.subheader("Grafik")
-            fig = go.Figure()
-            # ... (Orijinal kodunuzdaki Plotly figür oluşturma ve çizim mantığı)
-            for param in selected_params:
-                chart_type, target_yaxis, opacity = chart_types_for_params.get(param, "Çizgi (Line)"), yaxis_assignments.get(param, 'y'), opacity_values.get(param, 1.0)
-                trace_args = {'x': df.index, 'y': df[param], 'name': param, 'yaxis': target_yaxis, 'opacity': opacity}
-                if chart_type == "Çizgi (Line)": fig.add_trace(go.Scatter(mode='lines+markers', **trace_args))
-                elif chart_type == "Çubuk (Bar)": fig.add_trace(go.Bar(**trace_args))
-                elif chart_type == "Nokta (Scatter)": fig.add_trace(go.Scatter(mode='markers', **trace_args))
-            fig.update_layout(title_text="Zaman Serisi Grafiği", xaxis_title="Tarih", hovermode="x unified")
+            
+            # Yıllık görünüm veya normal görünüm
+            if yearly_view and selected_years:
+                fig = create_yearly_subplots(df_for_display, selected_params, selected_years, chart_types_for_params, opacity_values, limit_values, show_labels, yaxis_assignments)
+            else:
+                fig = go.Figure()
+                
+                for param in selected_params:
+                    chart_type = chart_types_for_params.get(param, "Çizgi (Line)")
+                    target_yaxis = yaxis_assignments.get(param, 'y')
+                    opacity = opacity_values.get(param, 1.0)
+                    
+                    trace_args = {
+                        'x': df_for_display.index, 
+                        'y': df_for_display[param], 
+                        'name': param, 
+                        'yaxis': target_yaxis, 
+                        'opacity': opacity
+                    }
+                    
+                    if show_labels:
+                        trace_args['mode'] = 'lines+markers+text'
+                        trace_args['text'] = [f"{val:.1f}" if not pd.isna(val) else "" for val in df_for_display[param]]
+                        trace_args['textposition'] = 'top center'
+                        trace_args['textfont'] = dict(size=8)
+                    else:
+                        trace_args['mode'] = 'lines'
+                    
+                    if chart_type == "Çizgi (Line)" or chart_type == "Nokta (Scatter)":
+                        fig.add_trace(go.Scatter(**trace_args))
+                    elif chart_type == "Çubuk (Bar)":
+                        fig.add_trace(go.Bar(**trace_args))
+                
+                # Limit çizgileri ekle (doğru eksene)
+                if show_limit_lines:
+                    for param, limit_val in limit_values.items():
+                        if limit_val is not None:
+                            target_yaxis = yaxis_assignments.get(param, 'y')
+                            fig.add_hline(
+                                y=limit_val,
+                                line_dash="dash",
+                                line_color="red",
+                                annotation_text=f"{param} Limit: {limit_val}",
+                                yref='y2' if target_yaxis == 'y2' else 'y'
+                            )
+                
+                # İkincil y ekseni ayarları
+                if any(yaxis == 'y2' for yaxis in yaxis_assignments.values()):
+                    fig.update_layout(yaxis2=dict(overlaying='y', side='right'))
+                
+                fig.update_layout(
+                    title_text="Zaman Serisi Grafiği", 
+                    xaxis_title="Tarih", 
+                    hovermode="x unified"
+                )
+            
             st.plotly_chart(fig, use_container_width=True)
+            
+            # Betimleyici İstatistikler (Genişletilmiş)
+            st.subheader("Betimleyici İstatistikler")
+            if selected_params:
+                # Kapsamlı istatistik tablosu oluştur
+                stats_data = []
+                for param in selected_params:
+                    if param in df_for_display.columns:
+                        series = df_for_display[param].dropna()
+                        if len(series) > 0:
+                            stats_data.append({
+                                'Parametre': param,
+                                'Count': len(series),
+                                'Mean': series.mean(),
+                                'Median': series.median(),
+                                'Minimum': series.min(),
+                                'Maximum': series.max(),
+                                'Std Dev': series.std(),
+                                'Variance': series.var(),
+                                'Skewness': series.skew(),
+                                'Kurtosis': series.kurtosis(),
+                                '25%': series.quantile(0.25),
+                                '50%': series.quantile(0.50),
+                                '75%': series.quantile(0.75)
+                            })
+                
+                if stats_data:
+                    detailed_stats_df = pd.DataFrame(stats_data)
+                    detailed_stats_df = detailed_stats_df.set_index('Parametre')
+                    # Sayısal değerleri formatla
+                    numeric_cols = detailed_stats_df.select_dtypes(include=[np.number]).columns
+                    formatted_stats = detailed_stats_df.copy()
+                    formatted_stats[numeric_cols] = formatted_stats[numeric_cols].round(4)
+                    st.dataframe(formatted_stats)
+                    
+            # Outlier Analizi Sonuçları
+            if remove_outliers:
+                st.subheader("Outlier Analizi Sonuçları (3 Sigma)")
+                outlier_details = []
+                outlier_data_all = []
+                
+                for param in selected_params:
+                    if param in df.columns:
+                        original_series = df[param].dropna()
+                        outliers = detect_outliers_3sigma(original_series)
+                        
+                        if len(outliers) > 0:
+                            # Outlier detayları için
+                            for date, value in outliers.items():
+                                outlier_data_all.append({
+                                    'Tarih': date,
+                                    'Parametre': param,
+                                    'Değer': round(value, 4)
+                                })
+                        
+                        outlier_details.append({
+                            'Parametre': param,
+                            'Toplam Veri': len(original_series),
+                            'Outlier Sayısı': len(outliers),
+                            'Outlier Oranı (%)': round(len(outliers)/len(original_series)*100, 2) if len(original_series) > 0 else 0
+                        })
+                
+                # Outlier özet tablosu
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**Outlier Özeti**")
+                    outlier_summary_df = pd.DataFrame(outlier_details)
+                    st.dataframe(outlier_summary_df)
+                
+                with col2:
+                    if outlier_data_all:
+                        st.write("**Tespit Edilen Outlier Değerler**")
+                        outlier_details_df = pd.DataFrame(outlier_data_all)
+                        outlier_details_df = outlier_details_df.sort_values(['Parametre', 'Tarih'])
+                        st.dataframe(outlier_details_df)
+            
+            # Veri Tablosu (en alta taşındı)
+            st.subheader("Veri Tablosu")
+            if selected_params:
+                # Seçilen tarih aralığı ve parametreler için tüm veriyi göster
+                display_data = df_for_display[selected_params].copy()
+                display_data.index.name = 'Tarih'
+                
+                # Formatlanmış veri tablosu
+                st.dataframe(display_data.style.format("{:.2f}"), use_container_width=True)
+                
+                # Veri indirme seçeneği
+                csv = display_data.to_csv()
+                st.download_button(
+                    label="Veriyi CSV olarak indir",
+                    data=csv,
+                    file_name=f'veri_tablosu_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv',
+                    mime='text/csv'
+                )
         else:
             st.info("Grafiği görüntülemek için lütfen en az bir tesis ve bir parametre seçin.")
 
@@ -187,15 +497,14 @@ if uploaded_file:
             params_for_plant = sorted([c for c in data_cols if c.startswith(selected_plant_lstm)])
             selected_param_lstm = st.selectbox("Tahmin Edilecek Parametreyi Seçin", params_for_plant, key="param_lstm")
             forecast_days = st.slider("Gelecek Kaç Gün Tahmin Edilsin?", min_value=7, max_value=90, value=30, key="forecast_days")
-            time_step = 60 # Modelin geçmişe bakacağı gün sayısı
+            time_step = 60
 
             if st.button("Tahmin Modelini Çalıştır", key="run_lstm", type="primary"):
                 with st.spinner(f"1/3: Veri hazırlanıyor..."):
-                    # Eğitilecek modeli ve ölçekleyiciyi al (önbellekten veya eğiterek)
                     model, scaler, rmse = train_and_predict_lstm(df_cleaned, selected_param_lstm, time_step)
                 
                 if model is None:
-                    st.error(rmse) # Hata mesajını göster
+                    st.error(rmse)
                 else:
                     st.metric(
                         label="Modelin Eğitim Verisi Üzerindeki Başarısı (RMSE)",
@@ -209,11 +518,9 @@ if uploaded_file:
                         forecast_values = make_future_forecast(model, scaler, last_sequence, time_step, forecast_days)
 
                     with st.spinner("3/3: Sonuçlar ve grafik oluşturuluyor..."):
-                        # Grafik için tarihleri oluştur
                         last_date = series_for_forecast.index.max()
                         future_dates = pd.to_datetime([last_date + timedelta(days=i) for i in range(1, forecast_days + 1)])
                         
-                        # Sonuçları görselleştir
                         fig_forecast = go.Figure()
                         fig_forecast.add_trace(go.Scatter(x=series_for_forecast.index, y=series_for_forecast.values, mode='lines', name='Geçmiş Veriler'))
                         fig_forecast.add_trace(go.Scatter(x=future_dates, y=forecast_values, mode='lines', name='Tahmin Edilen Değerler', line=dict(color='red', dash='dash')))
@@ -223,13 +530,11 @@ if uploaded_file:
                         )
                         st.plotly_chart(fig_forecast, use_container_width=True)
 
-                        # Tahmin tablosunu oluştur
                         df_forecast = pd.DataFrame({'Tarih': future_dates, 'Tahmin Edilen Değer': forecast_values})
                         st.subheader(f"Gelecek {forecast_days} Günlük Tahmin Değerleri")
                         st.dataframe(df_forecast.set_index('Tarih').style.format("{:.2f}"))
 
                     st.success("Tahmin işlemi başarıyla tamamlandı!")
 
-# Eğer dosya yüklenmediyse başlangıç ekranı mesajı
 else:
     st.warning("Lütfen analiz ve tahmin işlemlerine başlamak için bir CSV dosyası yükleyin.")
