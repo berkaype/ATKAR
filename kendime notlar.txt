@@ -1,0 +1,39 @@
+Tespit Edilen Outlier Değerler başlığında tarih bölümünde tarih formatı yyyy-mm-dd 00:00:00 formatında verilmiş sadece yyyy-mm-dd kısmı olması yeterli.
+
+checkbox ismi "3 sigma outlier kaldır" yerine "Outlier Değerleri Kaldır" olsun.  
+
+Outlier Özeti tablosunn hemen altında hangi yıldan kaç adet veri outlier oldu gibi bir küçük daha tablo olabilir.
+
+Yıllık karşılaştırma grafiklerinde limit değer çizgisi çok güzel bi şekilde çiziliyor ama yıllara göre karşılaştırma seçilmediğinde olduğu gibi sağ köşede hangi parametrenin limiti olduğu ve limitin kaç olduğu yazı ile gösterilmiyor. burada da aynı şekilde bir uygulama yapmamız gerekiyor.
+
+
+Düzenlemeye devam edelim;
+
+1- sol taraftaki panelde verilerimdeki ondalık ayıracını seçiyorum ya, bana gösterdiğin bütün sayılarda ondalık ayıracı da sol paneldeki şeçimimle orantılı olmalı. bir öyle bir böyle olmasını istemiyorum.
+
+2- csv çıktısı aldığımda başlıklarda AtakÃ¶y I KOÄ° GiriÅŸ AtakÃ¶y I AKM GiriÅŸ gibi şeyler görüyorum türkçe karakter sorununu CSV yi UTF-8 olarak kaydedince çözülüyordu diye hatırlıyorum eğer öyleyse uygun bir çözümle Türkçe karakter sorununu çözmelisin.
+
+3- birde programın önceki sürümlerinde şu şekilde bir opsiyon vardı. çizilen grafik günlük (şuanki gibi)  aylık ortalama ve  mevsimlik ortalama ve yıllık ortalama olarak betimlenebiliyordu. Bu özelliği geri getirmek istiyorum.
+
+1- ondalık ayıracı, 
+
+
+""""""""""""""""""""""
+#Henüz yapılmadı
+
+1- Veri tablosunda tarih formatı yyyy-mm-dd 00:00:00 formatında verilmiş sadece yyyy-mm-dd kısmı olması yeterli. daha önce benzer bir düzenleme yapmıştın aynı şekilde bnu da yapmanı istiyorum.
+
+2- Zaman aralığı tarafında şöyle bir problem var, günlük zaten sorunsuz geliyor, aylık da her ay için aylık ortalama geliyor olması lazım (örneğin bütün şubat 2023 değerlerinin ortalaması neyse onun gösterilmesi gerekiyor)
+   Aynı zamanda Yıllık seçtiğimde X ekseninde sadece yılları görmek isterim 2023, 2024, 2025 gibi ve bu yılların ortalama değerleri verilmeli.
+   Mevsimlikte şu şekilde bir yöntem izleyeceğiz. x  ekseninde labellar sonbahar, kış, ilkbahar, yaz diye sıralacanak, Örnek vermek gerekirse x ekseninde yaza denk gelen noktaya seçilen tarih aralığının bütün yazların ortalaması gelecek, aynı şekilde diğer labellarıda düşünebiliriz.
+
+3- Grafik cinsini bar seçinde "File "C:\Users\berka\OneDrive\Sık Kullanılanlar\Visual Projeler\ATKAR\ATKAR.py", line 408, in <module>
+    fig.add_trace(go.Bar(**trace_args))
+File "C:\Users\berka\AppData\Local\Programs\Python\Python310\lib\site-packages\plotly\graph_objs\_bar.py", line 2597, in __init__
+    self._process_kwargs(**dict(arg, **kwargs))
+File "C:\Users\berka\AppData\Local\Programs\Python\Python310\lib\site-packages\plotly\basedatatypes.py", line 4451, in _process_kwargs
+    raise err" "
+
+hatası alıyorum bunu çözmek lazım
+
+4- Birde geçmiş sürüm uyarısı alıyorum ay için M yerine ME kullanmamı istiyor. aynı şekilde Yıl için YE ve Gün için DE ise sen onu ayarla artık.

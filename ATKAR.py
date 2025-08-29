@@ -6,8 +6,8 @@ from plotly.subplots import make_subplots
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense
+from tensorflow.keras.models import Sequential # type: ignore
+from tensorflow.keras.layers import LSTM, Dense # type: ignore
 
 # --- Sayfa Yapılandırması ---
 st.set_page_config(layout="wide",
@@ -19,6 +19,59 @@ st.set_page_config(layout="wide",
 st.title("Atıksu Arıtma Tesisleri Karşılaştırma ve Tahmin Platformu")
 
 # --- Yardımcı Fonksiyonlar ---
+def format_number(value, decimal_separator):
+    """Sayıyı belirtilen ondalık ayırıcı ile formatlar"""
+    if pd.isna(value):
+        return ""
+    formatted = f"{value:.2f}"
+    if decimal_separator == ",":
+        formatted = formatted.replace(".", ",")
+    return formatted
+
+def format_dataframe(df, decimal_separator):
+    """DataFrame'deki sayısal değerleri formatlar"""
+    df_formatted = df.copy()
+    for col in df_formatted.select_dtypes(include=[np.number]).columns:
+        df_formatted[col] = df_formatted[col].apply(lambda x: format_number(x, decimal_separator))
+    return df_formatted
+
+def resample_data(df, selected_params, frequency):
+    """Veriyi belirtilen frekansa göre yeniden örnekler"""
+    if frequency == "Günlük":
+        return df[selected_params]
+    elif frequency == "Aylık":
+        # Aylık ortalamaları al
+        resampled = df[selected_params].resample('ME').mean()
+        # Index'i aylık formatla (YYYY-MM)
+        resampled.index = resampled.index.strftime('%Y-%m')
+        return resampled
+    elif frequency == "Mevsimlik":
+        # Mevsimlik gruplandırma
+        df_copy = df[selected_params].copy()
+        df_copy['mevsim'] = df_copy.index.month.map({
+            12: 'Kış', 1: 'Kış', 2: 'Kış',
+            3: 'İlkbahar', 4: 'İlkbahar', 5: 'İlkbahar',
+            6: 'Yaz', 7: 'Yaz', 8: 'Yaz',
+            9: 'Sonbahar', 10: 'Sonbahar', 11: 'Sonbahar'
+        })
+        
+        # Mevsimlik ortalama al
+        seasonal_data = df_copy.groupby('mevsim')[selected_params].mean()
+        
+        # Mevsim sıralaması
+        season_order = ['İlkbahar', 'Yaz', 'Sonbahar', 'Kış']
+        seasonal_data = seasonal_data.reindex([s for s in season_order if s in seasonal_data.index])
+        
+        return seasonal_data
+    elif frequency == "Yıllık":
+        # Yıllık ortalamaları al
+        resampled = df[selected_params].resample('YE').mean()
+        # Index'i yıl formatla
+        resampled.index = resampled.index.year
+        return resampled
+    else:
+        return df[selected_params]
+
 def detect_outliers_3sigma(series):
     """3 sigma yöntemi ile outlier'ları tespit eder"""
     mean = series.mean()
@@ -70,16 +123,21 @@ def create_yearly_subplots(df, selected_params, years, chart_types_for_params, o
                 'y': year_data[param],
                 'name': f"{param} ({year})",
                 'opacity': opacity,
-                'line': dict(color=color),
                 'showlegend': True
             }
             
-            if show_labels:
+            # Bar chart için özel ayarlar
+            if chart_type == "Çubuk (Bar)":
+                trace_args['marker'] = dict(color=color)
+            else:
+                trace_args['line'] = dict(color=color)
+            
+            if show_labels and chart_type != "Çubuk (Bar)":
                 trace_args['mode'] = 'lines+markers+text'
-                trace_args['text'] = [f"{val:.1f}" if not pd.isna(val) else "" for val in year_data[param]]
+                trace_args['text'] = [format_number(val, decimal_separator) if not pd.isna(val) else "" for val in year_data[param]]
                 trace_args['textposition'] = 'top center'
                 trace_args['textfont'] = dict(size=8)
-            else:
+            elif chart_type != "Çubuk (Bar)":
                 trace_args['mode'] = 'lines'
                 
             if chart_type == "Çizgi (Line)" or chart_type == "Nokta (Scatter)":
@@ -108,14 +166,18 @@ def create_yearly_subplots(df, selected_params, years, chart_types_for_params, o
                     col=1
                 )
                 
-                # Annotation ekle
+                # Annotation ekle (sağ üst köşeye)
                 fig.add_annotation(
-                    x=year_data.index.mean(),
+                    x=year_data.index.max(),
                     y=limit_values[param],
-                    text=f"Limit: {limit_values[param]}",
+                    text=f"{param} Limit: {format_number(limit_values[param], ',')}",  # Limit için virgül kullan
                     showarrow=False,
+                    xshift=10,
                     yshift=10,
                     font=dict(color="red", size=10),
+                    bgcolor="rgba(255,255,255,0.8)",
+                    bordercolor="red",
+                    borderwidth=1,
                     yref=yref,
                     row=i+1,
                     col=1
@@ -241,7 +303,7 @@ if uploaded_file:
     # --- Sekmeleri Oluştur ---
     tab1, tab2 = st.tabs(["Veri Görselleştirme ve Karşılaştırma", "Zaman Serisi Tahmini (LSTM)"])
 
-    # ============================ SEÇME 1: GÖRSELLEŞTİRME ============================
+    # ============================ SEKME 1: GÖRSELLEŞTİRME ============================
     with tab1:
         st.header("Tesis Verilerini Karşılaştırma")
         min_date, max_date = df_cleaned.index.min().date(), df_cleaned.index.max().date()
@@ -271,15 +333,25 @@ if uploaded_file:
             
             with col2:
                 show_limit_lines = st.checkbox("Limit Değer Çizgilerini Göster", value=False)
-                remove_outliers = st.checkbox("3 Sigma Outlier Kaldır", value=False)
+                remove_outliers = st.checkbox("Outlier Değerleri Kaldır", value=False)
                 
             with col3:
+                # Zaman aralığı seçimi
+                time_frequency = st.selectbox(
+                    "Zaman Aralığı:", 
+                    ["Günlük", "Aylık", "Mevsimlik", "Yıllık"], 
+                    index=0, 
+                    key="time_freq"
+                )
                 # Outlier işlemi
                 if remove_outliers:
                     # Outlier'ları kaldır
                     df_for_display = remove_outliers_3sigma(df, selected_params)
                 else:
                     df_for_display = df
+                    
+            # Zaman frekansına göre veriyi yeniden örnekle
+            df_resampled = resample_data(df_for_display, selected_params, time_frequency)
             
             st.subheader("Grafik Özelleştirme")
             chart_types_for_params, yaxis_assignments, opacity_values = {}, {}, {}
@@ -327,14 +399,14 @@ if uploaded_file:
 
             # Yıllık görünüm için yıl seçimi
             if yearly_view:
-                available_years = sorted(df_for_display.index.year.unique())
+                available_years = sorted(df_resampled.index.year.unique()) if time_frequency != "Yıllık" else sorted(df_resampled.index.unique())
                 selected_years = st.multiselect("Gösterilecek Yılları Seçin:", available_years, default=available_years[-2:] if len(available_years) > 1 else available_years)
             
             st.subheader("Grafik")
             
             # Yıllık görünüm veya normal görünüm
             if yearly_view and selected_years:
-                fig = create_yearly_subplots(df_for_display, selected_params, selected_years, chart_types_for_params, opacity_values, limit_values, show_labels, yaxis_assignments)
+                fig = create_yearly_subplots(df_resampled, selected_params, selected_years, chart_types_for_params, opacity_values, limit_values, show_labels, yaxis_assignments)
             else:
                 fig = go.Figure()
                 
@@ -344,24 +416,34 @@ if uploaded_file:
                     opacity = opacity_values.get(param, 1.0)
                     
                     trace_args = {
-                        'x': df_for_display.index, 
-                        'y': df_for_display[param], 
+                        'x': df_resampled.index, 
+                        'y': df_resampled[param], 
                         'name': param, 
                         'yaxis': target_yaxis, 
                         'opacity': opacity
                     }
                     
-                    if show_labels:
+                    # Bar chart için text modunu kaldır
+                    if show_labels and chart_type != "Çubuk (Bar)":
                         trace_args['mode'] = 'lines+markers+text'
-                        trace_args['text'] = [f"{val:.1f}" if not pd.isna(val) else "" for val in df_for_display[param]]
+                        trace_args['text'] = [format_number(val, decimal_separator) if not pd.isna(val) else "" for val in df_resampled[param]]
                         trace_args['textposition'] = 'top center'
                         trace_args['textfont'] = dict(size=8)
-                    else:
+                    elif chart_type != "Çubuk (Bar)":
                         trace_args['mode'] = 'lines'
                     
                     if chart_type == "Çizgi (Line)" or chart_type == "Nokta (Scatter)":
                         fig.add_trace(go.Scatter(**trace_args))
                     elif chart_type == "Çubuk (Bar)":
+                        # Bar için mode parametresini kaldır
+                        if 'mode' in trace_args:
+                            del trace_args['mode']
+                        if 'text' in trace_args:
+                            del trace_args['text']
+                        if 'textposition' in trace_args:
+                            del trace_args['textposition']
+                        if 'textfont' in trace_args:
+                            del trace_args['textfont']
                         fig.add_trace(go.Bar(**trace_args))
                 
                 # Limit çizgileri ekle (doğru eksene)
@@ -373,7 +455,7 @@ if uploaded_file:
                                 y=limit_val,
                                 line_dash="dash",
                                 line_color="red",
-                                annotation_text=f"{param} Limit: {limit_val}",
+                                annotation_text=f"{param} Limit: {format_number(limit_val, decimal_separator)}",
                                 yref='y2' if target_yaxis == 'y2' else 'y'
                             )
                 
@@ -381,9 +463,25 @@ if uploaded_file:
                 if any(yaxis == 'y2' for yaxis in yaxis_assignments.values()):
                     fig.update_layout(yaxis2=dict(overlaying='y', side='right'))
                 
+                # X eksenini özel formatla
+                if time_frequency == "Yıllık":
+                    fig.update_layout(
+                        xaxis_title="Yıl",
+                        xaxis=dict(
+                            tickmode='array',
+                            tickvals=df_resampled.index,
+                            ticktext=[str(year) for year in df_resampled.index]
+                        )
+                    )
+                elif time_frequency == "Mevsimlik":
+                    fig.update_layout(xaxis_title="Mevsim")
+                elif time_frequency == "Aylık":
+                    fig.update_layout(xaxis_title="Ay")
+                else:
+                    fig.update_layout(xaxis_title="Tarih")
+                
                 fig.update_layout(
-                    title_text="Zaman Serisi Grafiği", 
-                    xaxis_title="Tarih", 
+                    title_text=f"Zaman Serisi Grafiği ({time_frequency})", 
                     hovermode="x unified"
                 )
             
@@ -395,8 +493,8 @@ if uploaded_file:
                 # Kapsamlı istatistik tablosu oluştur
                 stats_data = []
                 for param in selected_params:
-                    if param in df_for_display.columns:
-                        series = df_for_display[param].dropna()
+                    if param in df_resampled.columns:
+                        series = df_resampled[param].dropna()
                         if len(series) > 0:
                             stats_data.append({
                                 'Parametre': param,
@@ -417,10 +515,8 @@ if uploaded_file:
                 if stats_data:
                     detailed_stats_df = pd.DataFrame(stats_data)
                     detailed_stats_df = detailed_stats_df.set_index('Parametre')
-                    # Sayısal değerleri formatla
-                    numeric_cols = detailed_stats_df.select_dtypes(include=[np.number]).columns
-                    formatted_stats = detailed_stats_df.copy()
-                    formatted_stats[numeric_cols] = formatted_stats[numeric_cols].round(4)
+                    # Formatla
+                    formatted_stats = format_dataframe(detailed_stats_df, decimal_separator)
                     st.dataframe(formatted_stats)
                     
             # Outlier Analizi Sonuçları
@@ -438,9 +534,9 @@ if uploaded_file:
                             # Outlier detayları için
                             for date, value in outliers.items():
                                 outlier_data_all.append({
-                                    'Tarih': date,
+                                    'Tarih': date.strftime('%Y-%m-%d'),  # Sadece tarih kısmı
                                     'Parametre': param,
-                                    'Değer': round(value, 4)
+                                    'Değer': format_number(value, decimal_separator)
                                 })
                         
                         outlier_details.append({
@@ -456,6 +552,20 @@ if uploaded_file:
                     st.write("**Outlier Özeti**")
                     outlier_summary_df = pd.DataFrame(outlier_details)
                     st.dataframe(outlier_summary_df)
+                    
+                    # Yıllık outlier dağılımı
+                    if outlier_data_all:
+                        st.write("**Yıllık Outlier Dağılımı**")
+                        outlier_yearly = {}
+                        for item in outlier_data_all:
+                            year = item['Tarih'][:4]  # İlk 4 karakter yıl
+                            outlier_yearly[year] = outlier_yearly.get(year, 0) + 1
+                        
+                        yearly_outlier_df = pd.DataFrame([
+                            {'Yıl': year, 'Outlier Sayısı': count} 
+                            for year, count in sorted(outlier_yearly.items())
+                        ])
+                        st.dataframe(yearly_outlier_df)
                 
                 with col2:
                     if outlier_data_all:
@@ -468,14 +578,33 @@ if uploaded_file:
             st.subheader("Veri Tablosu")
             if selected_params:
                 # Seçilen tarih aralığı ve parametreler için tüm veriyi göster
-                display_data = df_for_display[selected_params].copy()
+                display_data = df_resampled[selected_params].copy()
                 display_data.index.name = 'Tarih'
                 
-                # Formatlanmış veri tablosu
-                st.dataframe(display_data.style.format("{:.2f}"), use_container_width=True)
+                # Tarihi formatla - sadece tarih kısmını göster
+                display_data_copy = display_data.copy()
                 
-                # Veri indirme seçeneği
-                csv = display_data.to_csv()
+                # Zaman frekansına göre index formatı ayarla
+                if time_frequency == "Günlük":
+                    # DateTime index'i sadece tarih formatına çevir
+                    if hasattr(display_data_copy.index, 'strftime'):
+                        display_data_copy.index = display_data_copy.index.strftime('%Y-%m-%d')
+                elif time_frequency == "Aylık":
+                    # Zaten string formatında (YYYY-MM)
+                    pass
+                elif time_frequency == "Yıllık":
+                    # Zaten yıl formatında
+                    pass
+                elif time_frequency == "Mevsimlik":
+                    # Zaten mevsim isimlerinde
+                    pass
+                
+                # Formatlanmış veri tablosu
+                formatted_display = format_dataframe(display_data_copy, decimal_separator)
+                st.dataframe(formatted_display, use_container_width=True)
+                
+                # Veri indirme seçeneği (UTF-8 encoding ile)
+                csv = display_data_copy.to_csv(encoding='utf-8-sig')  # UTF-8 BOM ile
                 st.download_button(
                     label="Veriyi CSV olarak indir",
                     data=csv,
@@ -485,7 +614,7 @@ if uploaded_file:
         else:
             st.info("Grafiği görüntülemek için lütfen en az bir tesis ve bir parametre seçin.")
 
-    # ============================ SEÇME 2: LSTM TAHMİNİ ============================
+    # ============================ SEKME 2: LSTM TAHMİNİ ============================
     with tab2:
         st.header("LSTM ile Geleceğe Yönelik Parametre Tahmini")
         st.markdown("Bu modül, seçtiğiniz bir parametrenin geçmiş verilerini kullanarak gelecekteki değerlerini tahmin etmek için bir Uzun Kısa Süreli Bellek (LSTM) sinir ağı modeli kullanır.")
@@ -531,6 +660,8 @@ if uploaded_file:
                         st.plotly_chart(fig_forecast, use_container_width=True)
 
                         df_forecast = pd.DataFrame({'Tarih': future_dates, 'Tahmin Edilen Değer': forecast_values})
+                        # Tarih formatını düzenle
+                        df_forecast['Tarih'] = df_forecast['Tarih'].dt.strftime('%Y-%m-%d')
                         st.subheader(f"Gelecek {forecast_days} Günlük Tahmin Değerleri")
                         st.dataframe(df_forecast.set_index('Tarih').style.format("{:.2f}"))
 
