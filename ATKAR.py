@@ -19,20 +19,38 @@ st.set_page_config(layout="wide",
 st.title("Atıksu Arıtma Tesisleri Karşılaştırma ve Tahmin Platformu")
 
 # --- Yardımcı Fonksiyonlar ---
-def format_number(value, decimal_separator):
-    """Sayıyı belirtilen ondalık ayırıcı ile formatlar"""
+def format_number(value, decimal_separator, include_thousands=True):
+    """Sayıyı belirtilen ondalık ayırıcı ve binlik ayıracı ile formatlar"""
     if pd.isna(value):
         return ""
-    formatted = f"{value:.2f}"
+    
+    # Binlik ayıracı ile formatla
+    if include_thousands:
+        formatted = f"{value:,.2f}"
+    else:
+        formatted = f"{value:.2f}"
+    
+    # Ondalık ayırıcıyı değiştir
     if decimal_separator == ",":
-        formatted = formatted.replace(".", ",")
+        if include_thousands:
+            # İlk virgülleri (binlik ayıracı) geçici olarak değiştir
+            parts = formatted.split(".")
+            if len(parts) == 2:
+                integer_part = parts[0].replace(",", ".")  # Binlik ayıracı olarak nokta
+                decimal_part = parts[1]
+                formatted = f"{integer_part},{decimal_part}"  # Ondalık ayırıcı olarak virgül
+        else:
+            formatted = formatted.replace(".", ",")
+    
     return formatted
 
-def format_dataframe(df, decimal_separator):
+def format_dataframe(df, decimal_separator, include_thousands=True):
     """DataFrame'deki sayısal değerleri formatlar"""
     df_formatted = df.copy()
     for col in df_formatted.select_dtypes(include=[np.number]).columns:
-        df_formatted[col] = df_formatted[col].apply(lambda x: format_number(x, decimal_separator))
+        df_formatted[col] = df_formatted[col].apply(
+            lambda x: format_number(x, decimal_separator, include_thousands)
+        )
     return df_formatted
 
 def resample_data(df, selected_params, frequency):
@@ -90,7 +108,7 @@ def remove_outliers_3sigma(df, columns):
                           (df_cleaned[col] > (mean + 3*std)), col] = np.nan
     return df_cleaned
 
-def create_yearly_subplots(df, selected_params, years, chart_types_for_params, opacity_values, limit_values, show_labels, yaxis_assignments):
+def create_yearly_subplots(df, selected_params, years, chart_types_for_params, opacity_values, limit_values, show_labels, yaxis_assignments, decimal_separator):
     """Seçilen yıllar için alt alta grafik oluşturur"""
     fig = make_subplots(
         rows=len(years), 
@@ -134,7 +152,7 @@ def create_yearly_subplots(df, selected_params, years, chart_types_for_params, o
             
             if show_labels and chart_type != "Çubuk (Bar)":
                 trace_args['mode'] = 'lines+markers+text'
-                trace_args['text'] = [format_number(val, decimal_separator) if not pd.isna(val) else "" for val in year_data[param]]
+                trace_args['text'] = [format_number(val, decimal_separator, False) if not pd.isna(val) else "" for val in year_data[param]]
                 trace_args['textposition'] = 'top center'
                 trace_args['textfont'] = dict(size=8)
             elif chart_type != "Çubuk (Bar)":
@@ -170,7 +188,7 @@ def create_yearly_subplots(df, selected_params, years, chart_types_for_params, o
                 fig.add_annotation(
                     x=year_data.index.max(),
                     y=limit_values[param],
-                    text=f"{param} Limit: {format_number(limit_values[param], ',')}",  # Limit için virgül kullan
+                    text=f"{param} Limit: {format_number(limit_values[param], decimal_separator, False)}",
                     showarrow=False,
                     xshift=10,
                     yshift=10,
@@ -285,7 +303,7 @@ if uploaded_file:
     # Sidebar ayarları
     st.sidebar.header("Veri İşleme Ayarları")
     
-    decimal_separator = st.sidebar.radio("Verideki Ondalık Ayırıcı", (",", "."))  # Varsayılan olarak virgül
+    decimal_separator = st.sidebar.radio("Verideki Ondalık Ayırıcı", (",", "."))
     data_cols = [c for c in df_initial.columns if c != date_col]
     df_cleaned = df_initial[data_cols].copy()
     
@@ -293,10 +311,13 @@ if uploaded_file:
         if decimal_separator == ',':
             df_cleaned[col] = df_cleaned[col].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
         df_cleaned[col] = pd.to_numeric(df_cleaned[col], errors='coerce')
-
-    # Outlier işleme seçeneği kaldırıldı sidebar'dan
     
-    missing_data_strategy = st.sidebar.radio("Boş (NaN) Değerleri Nasıl İşleyelim?", ("Boş Bırak", "Enterpole Et (Doğrusal Doldur)"))  # Varsayılan olarak "Boş Bırak"
+    # **YENİ: 0 değerlerini NaN olarak işle**
+    zero_handling = st.sidebar.checkbox("0 değerlerini boş hücre olarak işle", value=True, help="Bu seçenek, veri setindeki 0 değerlerini NaN (boş) olarak dönüştürür. Ortalama hesaplamalarında daha doğru sonuçlar verir.")
+    if zero_handling:
+        df_cleaned = df_cleaned.replace(0, np.nan)
+    
+    missing_data_strategy = st.sidebar.radio("Boş (NaN) Değerleri Nasıl İşleyelim?", ("Boş Bırak", "Enterpole Et (Doğrusal Doldur)"))
     if missing_data_strategy == "Enterpole Et (Doğrusal Doldur)":
         df_cleaned.interpolate(method='linear', limit_direction='both', inplace=True)
 
@@ -406,7 +427,7 @@ if uploaded_file:
             
             # Yıllık görünüm veya normal görünüm
             if yearly_view and selected_years:
-                fig = create_yearly_subplots(df_resampled, selected_params, selected_years, chart_types_for_params, opacity_values, limit_values, show_labels, yaxis_assignments)
+                fig = create_yearly_subplots(df_resampled, selected_params, selected_years, chart_types_for_params, opacity_values, limit_values, show_labels, yaxis_assignments, decimal_separator)
             else:
                 fig = go.Figure()
                 
@@ -426,7 +447,7 @@ if uploaded_file:
                     # Bar chart için text modunu kaldır
                     if show_labels and chart_type != "Çubuk (Bar)":
                         trace_args['mode'] = 'lines+markers+text'
-                        trace_args['text'] = [format_number(val, decimal_separator) if not pd.isna(val) else "" for val in df_resampled[param]]
+                        trace_args['text'] = [format_number(val, decimal_separator, False) if not pd.isna(val) else "" for val in df_resampled[param]]
                         trace_args['textposition'] = 'top center'
                         trace_args['textfont'] = dict(size=8)
                     elif chart_type != "Çubuk (Bar)":
@@ -455,7 +476,7 @@ if uploaded_file:
                                 y=limit_val,
                                 line_dash="dash",
                                 line_color="red",
-                                annotation_text=f"{param} Limit: {format_number(limit_val, decimal_separator)}",
+                                annotation_text=f"{param} Limit: {format_number(limit_val, decimal_separator, False)}",
                                 yref='y2' if target_yaxis == 'y2' else 'y'
                             )
                 
@@ -516,8 +537,15 @@ if uploaded_file:
                     detailed_stats_df = pd.DataFrame(stats_data)
                     detailed_stats_df = detailed_stats_df.set_index('Parametre')
                     # Formatla
-                    formatted_stats = format_dataframe(detailed_stats_df, decimal_separator)
-                    st.dataframe(formatted_stats)
+                    formatted_stats = format_dataframe(detailed_stats_df, decimal_separator, True)
+                    # **YENİ: data_editor kullan**
+                    st.data_editor(
+                        formatted_stats,
+                        use_container_width=True,
+                        hide_index=False,
+                        disabled=True,  # Düzenleme yapılmasın
+                        key="stats_table"
+                    )
                     
             # Outlier Analizi Sonuçları
             if remove_outliers:
@@ -536,7 +564,7 @@ if uploaded_file:
                                 outlier_data_all.append({
                                     'Tarih': date.strftime('%Y-%m-%d'),  # Sadece tarih kısmı
                                     'Parametre': param,
-                                    'Değer': format_number(value, decimal_separator)
+                                    'Değer': format_number(value, decimal_separator, True)
                                 })
                         
                         outlier_details.append({
@@ -551,7 +579,14 @@ if uploaded_file:
                 with col1:
                     st.write("**Outlier Özeti**")
                     outlier_summary_df = pd.DataFrame(outlier_details)
-                    st.dataframe(outlier_summary_df)
+                    # **YENİ: data_editor kullan**
+                    st.data_editor(
+                        outlier_summary_df,
+                        use_container_width=True,
+                        hide_index=True,
+                        disabled=True,
+                        key="outlier_summary_table"
+                    )
                     
                     # Yıllık outlier dağılımı
                     if outlier_data_all:
@@ -565,14 +600,28 @@ if uploaded_file:
                             {'Yıl': year, 'Outlier Sayısı': count} 
                             for year, count in sorted(outlier_yearly.items())
                         ])
-                        st.dataframe(yearly_outlier_df)
+                        # **YENİ: data_editor kullan**
+                        st.data_editor(
+                            yearly_outlier_df,
+                            use_container_width=True,
+                            hide_index=True,
+                            disabled=True,
+                            key="yearly_outlier_table"
+                        )
                 
                 with col2:
                     if outlier_data_all:
                         st.write("**Tespit Edilen Outlier Değerler**")
                         outlier_details_df = pd.DataFrame(outlier_data_all)
                         outlier_details_df = outlier_details_df.sort_values(['Parametre', 'Tarih'])
-                        st.dataframe(outlier_details_df)
+                        # **YENİ: data_editor kullan**
+                        st.data_editor(
+                            outlier_details_df,
+                            use_container_width=True,
+                            hide_index=True,
+                            disabled=True,
+                            key="outlier_details_table"
+                        )
             
             # Veri Tablosu (en alta taşındı)
             st.subheader("Veri Tablosu")
@@ -600,8 +649,16 @@ if uploaded_file:
                     pass
                 
                 # Formatlanmış veri tablosu
-                formatted_display = format_dataframe(display_data_copy, decimal_separator)
-                st.dataframe(formatted_display, use_container_width=True)
+                formatted_display = format_dataframe(display_data_copy, decimal_separator, True)
+                
+                # **YENİ: data_editor kullan - kopyala yapıştır için daha uygun**
+                st.data_editor(
+                    formatted_display,
+                    use_container_width=True,
+                    hide_index=False,
+                    disabled=True,  # Düzenleme yapılmasın
+                    key="main_data_table"
+                )
                 
                 # Veri indirme seçeneği (UTF-8 encoding ile)
                 csv = display_data_copy.to_csv(encoding='utf-8-sig')  # UTF-8 BOM ile
@@ -662,8 +719,22 @@ if uploaded_file:
                         df_forecast = pd.DataFrame({'Tarih': future_dates, 'Tahmin Edilen Değer': forecast_values})
                         # Tarih formatını düzenle
                         df_forecast['Tarih'] = df_forecast['Tarih'].dt.strftime('%Y-%m-%d')
+                        
+                        # Tahmin değerlerini formatla
+                        df_forecast_formatted = df_forecast.copy()
+                        df_forecast_formatted['Tahmin Edilen Değer'] = df_forecast_formatted['Tahmin Edilen Değer'].apply(
+                            lambda x: format_number(x, decimal_separator, True)
+                        )
+                        
                         st.subheader(f"Gelecek {forecast_days} Günlük Tahmin Değerleri")
-                        st.dataframe(df_forecast.set_index('Tarih').style.format("{:.2f}"))
+                        # **YENİ: data_editor kullan**
+                        st.data_editor(
+                            df_forecast_formatted.set_index('Tarih'),
+                            use_container_width=True,
+                            hide_index=False,
+                            disabled=True,
+                            key="forecast_table"
+                        )
 
                     st.success("Tahmin işlemi başarıyla tamamlandı!")
 
