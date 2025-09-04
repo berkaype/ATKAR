@@ -99,3 +99,24 @@ if selected_plant_lstm:
             st.dataframe(df_forecast.set_index('Tarih').style.format("{:.2f}"))
 
         st.success("Tahmin işlemi başarıyla tamamlandı!")
+
+
+########################################################
+
+Sistem Belirtilen yolu bulamıyor. girdisi?
+
+
+########################################################
+
+CSV nin ikinci sayfasına birimler eklenebilir.
+
+
+########################################################
+
+LTSM sekmesinde copy paste çalışıyor mu kontrol et. dataframe de data editor kullan.
+
+
+########################################################
+
+descriptive statistics alanında bir histogram çiz, bin range i ayrı bir tabloda göster, skewness ve kurtosis değerlerini yorumla Stdev ve variance için Coefficient of Variation (CV) = Std Dev / Mean yöntemini kullan.
+

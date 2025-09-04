@@ -11,7 +11,7 @@ from tensorflow.keras.layers import LSTM, Dense # type: ignore
 
 # --- Sayfa Yapılandırması ---
 st.set_page_config(layout="wide",
-                   page_title="ATKAR - Atıksu Arıtma Platformu",
+                   page_title="ATKAR - Atıksu Arıtma Tesisleri Karşılaştırma ve Tahmin Platformu",
                    page_icon="💧"
                    )
 
