@@ -103,13 +103,11 @@ if selected_plant_lstm:
 
 ########################################################
 
-Sistem Belirtilen yolu bulamıyor. girdisi?
-
-
-########################################################
-
 CSV nin ikinci sayfasına birimler eklenebilir.
 
+steramlit app ına bir CSV yüklüyorum.  
+bunun ikinci sayfasında csv nin ilk sayfasında yüklediğim dataların ilk satırında olan parametrelerin birimlerini yazmak istiyorum. 
+bu birimler grafiklerde ve tablolarda gösterilsin 
 
 ########################################################
 
@@ -117,6 +115,4 @@ LTSM sekmesinde copy paste çalışıyor mu kontrol et. dataframe de data editor
 
 
 ########################################################
-
-descriptive statistics alanında bir histogram çiz, bin range i ayrı bir tabloda göster, skewness ve kurtosis değerlerini yorumla Stdev ve variance için Coefficient of Variation (CV) = Std Dev / Mean yöntemini kullan.
 

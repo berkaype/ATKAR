@@ -508,26 +508,48 @@ if uploaded_file:
             
             st.plotly_chart(fig, use_container_width=True)
             
+
+
             # Betimleyici İstatistikler (Genişletilmiş)
             st.subheader("Betimleyici İstatistikler")
             if selected_params:
+                # Histogram için parametre seçimi
+                col1, col2 = st.columns([2, 1])
+                with col1:
+                    histogram_param = st.selectbox(
+                        "Histogram için parametre seçin:", 
+                        selected_params, 
+                        key="histogram_param"
+                    )
+                with col2:
+                    show_histogram = st.checkbox("Histogram Göster", value=False, key="show_histogram")
+                    if show_histogram:
+                        bin_count = st.slider("Bin Sayısı:", min_value=5, max_value=50, value=20, key="bin_count")
+                
                 # Kapsamlı istatistik tablosu oluştur
                 stats_data = []
                 for param in selected_params:
                     if param in df_resampled.columns:
                         series = df_resampled[param].dropna()
                         if len(series) > 0:
+                            mean_val = series.mean()
+                            std_val = series.std()
+                            cv_val = (std_val / abs(mean_val)) * 100 if mean_val != 0 else np.inf  # CV yüzde olarak
+                            skewness_val = series.skew()
+                            kurtosis_val = series.kurtosis()
+                            
                             stats_data.append({
                                 'Parametre': param,
                                 'Count': len(series),
-                                'Mean': series.mean(),
+                                'Mean': mean_val,
                                 'Median': series.median(),
                                 'Minimum': series.min(),
                                 'Maximum': series.max(),
-                                'Std Dev': series.std(),
+                                'Std Dev': std_val,
                                 'Variance': series.var(),
-                                'Skewness': series.skew(),
-                                'Kurtosis': series.kurtosis(),
+                                'CV (%)': cv_val,  # Coefficient of Variation
+                                'Skewness': skewness_val,
+                                'Kurtosis': kurtosis_val,
                                 '25%': series.quantile(0.25),
                                 '50%': series.quantile(0.50),
                                 '75%': series.quantile(0.75)
@@ -536,16 +558,203 @@ if uploaded_file:
                 if stats_data:
                     detailed_stats_df = pd.DataFrame(stats_data)
                     detailed_stats_df = detailed_stats_df.set_index('Parametre')
-                    # Formatla
-                    formatted_stats = format_dataframe(detailed_stats_df, decimal_separator, True)
-                    # **YENİ: data_editor kullan**
+                    
+                    # İstatistikleri formatla (CV için özel formatting)
+                    formatted_stats = detailed_stats_df.copy()
+                    for col in formatted_stats.columns:
+                        if col == 'CV (%)':
+                            # CV için özel formatla (sonsuz değerleri işle)
+                            formatted_stats[col] = formatted_stats[col].apply(
+                                lambda x: "∞" if np.isinf(x) else format_number(x, decimal_separator, True)
+                            )
+                        elif col == 'Count':
+                            # Count için tam sayı formatla
+                            formatted_stats[col] = formatted_stats[col].astype(int)
+                        else:
+                            formatted_stats[col] = formatted_stats[col].apply(
+                                lambda x: format_number(x, decimal_separator, True)
+                            )
+                    
                     st.data_editor(
                         formatted_stats,
                         use_container_width=True,
                         hide_index=False,
-                        disabled=True,  # Düzenleme yapılmasın
+                        disabled=True,
                         key="stats_table"
                     )
+                    
+                    # Skewness ve Kurtosis yorumları
+                    st.subheader("İstatistiksel Yorumlar")
+                    
+                    # Her parametre için yorum tablosu
+                    interpretation_data = []
+                    for param in selected_params:
+                        if param in detailed_stats_df.index:
+                            skew_val = detailed_stats_df.loc[param, 'Skewness']
+                            kurt_val = detailed_stats_df.loc[param, 'Kurtosis']
+                            cv_val = detailed_stats_df.loc[param, 'CV (%)']
+                            
+                            # Skewness yorumu
+                            if abs(skew_val) < 0.5:
+                                skew_interpretation = "Yaklaşık simetrik"
+                            elif abs(skew_val) < 1.0:
+                                skew_interpretation = "Hafif çarpık" + (" (sağa)" if skew_val > 0 else " (sola)")
+                            else:
+                                skew_interpretation = "Oldukça çarpık" + (" (sağa)" if skew_val > 0 else " (sola)")
+                            
+                            # Kurtosis yorumu
+                            if kurt_val < -1:
+                                kurt_interpretation = "Platykurtic (düz dağılım)"
+                            elif kurt_val > 1:
+                                kurt_interpretation = "Leptokurtic (sivri dağılım)"
+                            else:
+                                kurt_interpretation = "Mesokurtic (normal benzeri)"
+                            
+                            # CV yorumu
+                            if np.isinf(cv_val):
+                                cv_interpretation = "Tanımsız (ortalama sıfır)"
+                            elif cv_val < 10:
+                                cv_interpretation = "Düşük değişkenlik"
+                            elif cv_val < 25:
+                                cv_interpretation = "Orta değişkenlik"
+                            else:
+                                cv_interpretation = "Yüksek değişkenlik"
+                            
+                            interpretation_data.append({
+                                'Parametre': param,
+                                'Çarpıklık (Skewness)': f"{format_number(skew_val, decimal_separator, False)} - {skew_interpretation}",
+                                'Basıklık (Kurtosis)': f"{format_number(kurt_val, decimal_separator, False)} - {kurt_interpretation}",
+                                'Değişim Katsayısı': f"{format_number(cv_val, decimal_separator, False) if not np.isinf(cv_val) else '∞'}% - {cv_interpretation}"
+                            })
+                    
+                    interpretation_df = pd.DataFrame(interpretation_data)
+                    st.data_editor(
+                        interpretation_df.set_index('Parametre'),
+                        use_container_width=True,
+                        hide_index=False,
+                        disabled=True,
+                        key="interpretation_table"
+                    )
+                    
+                    with st.expander("İstatistiksel Terimlerin Açıklamaları"):
+                        st.markdown("""
+                        Bu bölümde, yukarıdaki tabloda yer alan istatistiksel terimlerin ne anlama geldiği açıklanmaktadır.
+
+                        ### Çarpıklık (Skewness)
+                        Veri dağılımının simetrisini ölçer.
+                        - **Yaklaşık Simetrik:** Veriler, ortalama değer etrafında dengeli bir şekilde dağılmıştır. Normal dağılıma benzer bir yapı gösterir.
+                        - **Sağa Çarpık (Pozitif Çarpıklık):** Dağılımın kuyruğu sağa doğru uzar. Bu durum, veri setinde ortalamayı yukarı çeken birkaç tane aykırı yüksek değer olduğunu gösterir. Genellikle `Ortalama > Medyan` olur.
+                        - **Sola Çarpık (Negatif Çarpıklık):** Dağılımın kuyruğu sola doğru uzar. Bu durum, veri setinde ortalamayı aşağı çeken birkaç tane aykırı düşük değer olduğunu gösterir. Genellikle `Ortalama < Medyan` olur.
+
+                        ---
+
+                        ### Basıklık (Kurtosis)
+                        Veri dağılımının ne kadar 'sivri' veya 'düz' olduğunu normal dağılıma göre ölçer. Aykırı değerlerin varlığı hakkında fikir verir.
+                        - **Leptokurtic (Sivri Dağılım):** Dağılım, normal dağılıma göre daha sivri bir tepeye ve daha kalın kuyruklara sahiptir. Bu, veri setinde daha fazla aykırı değer olma olasılığını gösterir.
+                        - **Mesokurtic (Normal Benzeri):** Dağılımın basıklığı normal dağılıma çok benzer. Aykırı değerler beklendiği gibidir.
+                        - **Platykurtic (Düz Dağılım):** Dağılım, normal dağılıma göre daha basık bir tepeye ve daha ince kuyruklara sahiptir. Bu, veri setinde daha az aykırı değer olma olasılığını gösterir.
+
+                        ---
+
+                        ### Değişim Katsayısı (Coefficient of Variation - CV)
+                        Standart sapmanın ortalamaya bölünmesiyle bulunan, yüzde olarak ifade edilen göreceli bir değişkenlik ölçüsüdür. Farklı birimlere veya farklı ortalamalara sahip veri setlerinin değişkenliğini karşılaştırmak için çok kullanışlıdır.
+                        - **Düşük Değişkenlik:** Veri noktaları ortalamaya çok yakındır. Veri seti tutarlıdır.
+                        - **Orta Değişkenlik:** Verilerde makul ve beklenebilecek bir yayılım vardır.
+                        - **Yüksek Değişkenlik:** Veri noktaları ortalamadan oldukça uzağa yayılmıştır. Veri seti tutarsızdır veya büyük dalgalanmalar göstermektedir.
+                        - **Tanımsız:** Ortalama değer sıfır ise standart sapmayı sıfıra bölmek matematiksel olarak tanımsız olduğundan bu katsayı hesaplanamaz.
+                        """)
+                # Histogram ve Bin Analizi
+                if show_histogram and histogram_param in df_resampled.columns:
+                    st.subheader(f"Histogram Analizi: {histogram_param}")
+                    
+                    series_for_hist = df_resampled[histogram_param].dropna()
+                    
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        # Histogram oluştur
+                        fig_hist = go.Figure()
+                        fig_hist.add_trace(go.Histogram(
+                            x=series_for_hist,
+                            nbinsx=bin_count,
+                            name=histogram_param,
+                            marker_color='skyblue',
+                            marker_line_color='darkblue',
+                            marker_line_width=1
+                        ))
+                        
+                        # Ortalama ve medyan çizgileri ekle
+                        mean_val = series_for_hist.mean()
+                        median_val = series_for_hist.median()
+                        
+                        fig_hist.add_vline(
+                            x=mean_val, 
+                            line_dash="dash", 
+                            line_color="red"
+                        )
+                        fig_hist.add_vline(
+                            x=median_val, 
+                            line_dash="dash", 
+                            line_color="green"
+                        )
+                        
+                        fig_hist.update_layout(
+                            title=f"{histogram_param} - Frekans Dağılımı",
+                            xaxis_title="Değer",
+                            yaxis_title="Frekans",
+                            showlegend=False
+                        )
+                        
+                        st.plotly_chart(fig_hist, use_container_width=True)
+                        
+                        # Histogram lejandı
+                        st.markdown(f"""
+                        <div style="background-color: var(--secondary-background-color); border: 1px solid var(--gray-30); padding: 10px; border-radius: 5px; margin-top: -10px;">
+                        <small>
+                        <span style="color: red;">━ ━ ━</span> <strong>Ortalama:</strong> {format_number(mean_val, decimal_separator, False)} &nbsp;&nbsp;&nbsp;
+                        <span style="color: green;">━ ━ ━</span> <strong>Medyan:</strong> {format_number(median_val, decimal_separator, False)}
+                        </small>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with col2:
+                        # Bin aralıkları tablosu
+                        st.write("**Bin Aralıkları ve Frekanslar**")
+                        
+                        # Numpy histogram ile bin bilgilerini al
+                        hist_counts, bin_edges = np.histogram(series_for_hist, bins=bin_count)
+                        
+                        bin_data = []
+                        for i in range(len(hist_counts)):
+                            bin_start = bin_edges[i]
+                            bin_end = bin_edges[i+1]
+                            bin_data.append({
+                                'Bin': f"{i+1}",
+                                'Aralık': f"[{format_number(bin_start, decimal_separator, False)}, {format_number(bin_end, decimal_separator, False)})",
+                                'Frekans': int(hist_counts[i]),
+                                'Yüzde (%)': round((hist_counts[i] / len(series_for_hist)) * 100, 2)
+                            })
+                        
+                        bin_df = pd.DataFrame(bin_data)
+                        st.data_editor(
+                            bin_df.set_index('Bin'),
+                            use_container_width=True,
+                            hide_index=False,
+                            disabled=True,
+                            key="bin_table"
+                        )
+                        
+                        # Bin istatistikleri özeti
+                        st.write("**Bin İstatistikleri**")
+                        st.metric("Toplam Bin Sayısı", bin_count)
+                        st.metric("En Yüksek Frekans", int(hist_counts.max()))
+                        st.metric("En Düşük Frekans", int(hist_counts.min()))
+                        
+                        # En yüksek frekanslı bin
+                        max_freq_idx = np.argmax(hist_counts)
+                        max_bin_start = format_number(bin_edges[max_freq_idx], decimal_separator, False)
+                        max_bin_end = format_number(bin_edges[max_freq_idx + 1], decimal_separator, False)
+                        st.info(f"**En Yüksek Frekanslı Aralık:**\n[{max_bin_start}, {max_bin_end})")
                     
             # Outlier Analizi Sonuçları
             if remove_outliers:
