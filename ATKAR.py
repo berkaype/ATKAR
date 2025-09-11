@@ -53,6 +53,13 @@ def format_dataframe(df, decimal_separator, include_thousands=True):
         )
     return df_formatted
 
+def get_param_with_unit(param_name, units_dict):
+    """Parametre adını birimi ile birlikte döndürür"""
+    unit = units_dict.get(param_name, "")
+    if unit and unit.strip():
+        return f"{param_name} ({unit})"
+    return param_name
+
 def resample_data(df, selected_params, frequency):
     """Veriyi belirtilen frekansa göre yeniden örnekler"""
     if frequency == "Günlük":
@@ -108,7 +115,7 @@ def remove_outliers_3sigma(df, columns):
                           (df_cleaned[col] > (mean + 3*std)), col] = np.nan
     return df_cleaned
 
-def create_yearly_subplots(df, selected_params, years, chart_types_for_params, opacity_values, limit_values, show_labels, yaxis_assignments, decimal_separator):
+def create_yearly_subplots(df, selected_params, years, chart_types_for_params, opacity_values, limit_values, show_labels, yaxis_assignments, decimal_separator, units_dict):
     """Seçilen yıllar için alt alta grafik oluşturur"""
     fig = make_subplots(
         rows=len(years), 
@@ -135,11 +142,12 @@ def create_yearly_subplots(df, selected_params, years, chart_types_for_params, o
             color = colors[j % len(colors)]
             target_yaxis = yaxis_assignments.get(param, 'y')
             secondary_y = target_yaxis == 'y2'
+            param_with_unit = get_param_with_unit(param, units_dict)
             
             trace_args = {
                 'x': year_data.index,
                 'y': year_data[param],
-                'name': f"{param} ({year})",
+                'name': f"{param_with_unit} ({year})",
                 'opacity': opacity,
                 'showlegend': True
             }
@@ -185,10 +193,15 @@ def create_yearly_subplots(df, selected_params, years, chart_types_for_params, o
                 )
                 
                 # Annotation ekle (sağ üst köşeye)
+                unit = units_dict.get(param, "")
+                limit_text = f"{param} Limit: {format_number(limit_values[param], decimal_separator, False)}"
+                if unit:
+                    limit_text += f" {unit}"
+                    
                 fig.add_annotation(
                     x=year_data.index.max(),
                     y=limit_values[param],
-                    text=f"{param} Limit: {format_number(limit_values[param], decimal_separator, False)}",
+                    text=limit_text,
                     showarrow=False,
                     xshift=10,
                     yshift=10,
@@ -265,30 +278,76 @@ def make_future_forecast(model, scaler, last_data, time_step, forecast_days):
 
 # --- Veri Yükleme ---
 st.info("Başlamak için lütfen CSV formatındaki zaman serisi verilerinizi yükleyin.")
+st.markdown("""
+**CSV Formatı:**
+- 1. satır: Parametrelerin birimleri (ilk hücre boş, sonraki hücreler birimler)
+- 2. satır: Başlıklar (tarih sütunu + parametre adları)
+- 3. satırdan itibaren: Tarih ve veri değerleri
+""")
+
 uploaded_file = st.file_uploader("CSV dosyasını yükleyin", type=["csv"], key="data_uploader")
 
 if uploaded_file:
     @st.cache_data
-    def load_data(file):
+    def load_data_with_units(file):
         encodings = ['utf-8', 'latin1', 'cp1254']
         separators = [',', ';', '\t']
-        df = None
+        
         for enc in encodings:
             for sep in separators:
                 try:
                     file.seek(0)
-                    df = pd.read_csv(file, encoding=enc, sep=sep, engine='python')
+                    
+                    # İlk satırı (birimler) oku
+                    units_row = pd.read_csv(file, encoding=enc, sep=sep, nrows=1, header=None)
+                    
+                    # Dosyayı başa al
+                    file.seek(0)
+                    
+                    # İkinci satırı (başlıklar) oku
+                    headers_row = pd.read_csv(file, encoding=enc, sep=sep, nrows=1, skiprows=1, header=None)
+                    
+                    # Dosyayı başa al ve veriyi oku (ilk 2 satırı atla)
+                    file.seek(0)
+                    df = pd.read_csv(file, encoding=enc, sep=sep, skiprows=2, header=None)
+                    
+                    # Başlıkları ayarla
+                    df.columns = headers_row.iloc[0].values
                     df.columns = df.columns.map(str).str.strip()
-                    return df
-                except Exception:
+                    
+                    # Birimler sözlüğünü oluştur
+                    units_dict = {}
+                    if len(units_row.columns) > 1:  # İlk sütun tarih, sonrakiler parametreler
+                        param_columns = headers_row.iloc[0].values[1:]  # İlk sütun tarih
+                        unit_values = units_row.iloc[0].values[1:]  # İlk sütun boş olabilir
+                        
+                        for i, param in enumerate(param_columns):
+                            if i < len(unit_values) and pd.notna(unit_values[i]):
+                                units_dict[str(param).strip()] = str(unit_values[i]).strip()
+                            else:
+                                units_dict[str(param).strip()] = ""
+                    
+                    return df, units_dict
+                    
+                except Exception as e:
                     continue
-        return None
+        
+        return None, None
 
-    df_initial = load_data(uploaded_file)
+    df_initial, units_dict = load_data_with_units(uploaded_file)
 
     if df_initial is None:
         st.error("Dosya okunamadı. Lütfen dosyanızın CSV formatında olduğundan ve doğru ayırıcıyı kullandığından emin olun.")
         st.stop()
+    
+    # Birimler sözlüğünü göster
+    if units_dict:
+        with st.expander("Tespit Edilen Parametre Birimleri"):
+            units_df = pd.DataFrame([
+                {'Parametre': param, 'Birim': unit if unit else "Birim belirtilmemiş"}
+                for param, unit in units_dict.items()
+            ])
+            st.dataframe(units_df, use_container_width=True)
 
     try:
         date_col = df_initial.columns[0]
@@ -343,7 +402,17 @@ if uploaded_file:
         selected_plants = st.multiselect("Karşılaştırılacak Tesisleri Seçin", plants, key="plants_tab1")
         
         available_params = sorted([c for c in data_cols if any(c.startswith(p) for p in selected_plants)])
-        selected_params = st.multiselect("Grafikte Gösterilecek Parametreleri Seçin", available_params, key="params_tab1")
+        
+        # Parametreleri birimli olarak göster
+        param_options = []
+        param_mapping = {}  # Birimli gösterim -> orijinal parametre adı
+        for param in available_params:
+            param_with_unit = get_param_with_unit(param, units_dict)
+            param_options.append(param_with_unit)
+            param_mapping[param_with_unit] = param
+        
+        selected_params_with_units = st.multiselect("Grafikte Gösterilecek Parametreleri Seçin", param_options, key="params_tab1")
+        selected_params = [param_mapping[param] for param in selected_params_with_units]
         
         if selected_params:
             # Grafik görüntüleme seçenekleri
@@ -381,8 +450,9 @@ if uploaded_file:
             with col1:
                 st.write("**Grafik Tipi**")
                 for param in selected_params:
+                    param_with_unit = get_param_with_unit(param, units_dict)
                     chart_types_for_params[param] = st.selectbox(
-                        f"'{param}' tipi", 
+                        f"'{param_with_unit}' tipi", 
                         ("Çizgi (Line)", "Çubuk (Bar)", "Nokta (Scatter)"), 
                         key=f"chart_type_{param}"
                     )
@@ -390,8 +460,9 @@ if uploaded_file:
             with col2:
                 st.write("**Y Ekseni**")
                 for param in selected_params:
+                    param_with_unit = get_param_with_unit(param, units_dict)
                     axis_choice = st.selectbox(
-                        f"'{param}' ekseni", 
+                        f"'{param_with_unit}' ekseni", 
                         ('Birincil Eksen (Sol)', 'İkincil Eksen (Sağ)'), 
                         key=f"yaxis_{param}"
                     )
@@ -400,8 +471,9 @@ if uploaded_file:
             with col3:
                 st.write("**Opaklık**")
                 for param in selected_params:
+                    param_with_unit = get_param_with_unit(param, units_dict)
                     opacity_values[param] = st.slider(
-                        f"'{param}' opaklık", 
+                        f"'{param_with_unit}' opaklık", 
                         0.1, 1.0, 1.0, 0.1, 
                         key=f"opacity_{param}"
                     )
@@ -413,9 +485,10 @@ if uploaded_file:
                 limit_cols = st.columns(3)
                 for i, param in enumerate(selected_params):
                     with limit_cols[i % 3]:
+                        param_with_unit = get_param_with_unit(param, units_dict)
                         # Hangi eksende olduğunu göster
                         axis_info = "Birincil" if yaxis_assignments.get(param, 'y') == 'y' else "İkincil"
-                        limit_val = st.number_input(f"{param} için limit ({axis_info} Eksen):", value=None, key=f"limit_{param}")
+                        limit_val = st.number_input(f"{param_with_unit} için limit ({axis_info} Eksen):", value=None, key=f"limit_{param}")
                         limit_values[param] = limit_val
 
             # Yıllık görünüm için yıl seçimi
@@ -427,7 +500,7 @@ if uploaded_file:
             
             # Yıllık görünüm veya normal görünüm
             if yearly_view and selected_years:
-                fig = create_yearly_subplots(df_resampled, selected_params, selected_years, chart_types_for_params, opacity_values, limit_values, show_labels, yaxis_assignments, decimal_separator)
+                fig = create_yearly_subplots(df_resampled, selected_params, selected_years, chart_types_for_params, opacity_values, limit_values, show_labels, yaxis_assignments, decimal_separator, units_dict)
             else:
                 fig = go.Figure()
                 
@@ -435,11 +508,12 @@ if uploaded_file:
                     chart_type = chart_types_for_params.get(param, "Çizgi (Line)")
                     target_yaxis = yaxis_assignments.get(param, 'y')
                     opacity = opacity_values.get(param, 1.0)
+                    param_with_unit = get_param_with_unit(param, units_dict)
                     
                     trace_args = {
                         'x': df_resampled.index, 
                         'y': df_resampled[param], 
-                        'name': param, 
+                        'name': param_with_unit, 
                         'yaxis': target_yaxis, 
                         'opacity': opacity
                     }
@@ -472,16 +546,45 @@ if uploaded_file:
                     for param, limit_val in limit_values.items():
                         if limit_val is not None:
                             target_yaxis = yaxis_assignments.get(param, 'y')
+                            unit = units_dict.get(param, "")
+                            limit_text = f"{param} Limit: {format_number(limit_val, decimal_separator, False)}"
+                            if unit:
+                                limit_text += f" {unit}"
+                            
                             fig.add_hline(
                                 y=limit_val,
                                 line_dash="dash",
                                 line_color="red",
-                                annotation_text=f"{param} Limit: {format_number(limit_val, decimal_separator, False)}",
+                                annotation_text=limit_text,
                                 yref='y2' if target_yaxis == 'y2' else 'y'
                             )
                 
-                # İkincil y ekseni ayarları
-                if any(yaxis == 'y2' for yaxis in yaxis_assignments.values()):
+                # Y ekseni etiketlerini birimlerle güncelle
+                primary_params = [p for p in selected_params if yaxis_assignments.get(p, 'y') == 'y']
+                secondary_params = [p for p in selected_params if yaxis_assignments.get(p, 'y') == 'y2']
+                
+                # Birincil Y ekseni etiketi
+                if primary_params:
+                    primary_units = list(set([units_dict.get(p, "") for p in primary_params if units_dict.get(p, "")]))
+                    if len(primary_units) == 1:
+                        fig.update_layout(yaxis_title=f"Değer ({primary_units[0]})")
+                    elif len(primary_units) > 1:
+                        fig.update_layout(yaxis_title=f"Değer ({', '.join(primary_units)})")
+                    else:
+                        fig.update_layout(yaxis_title="Değer")
+                
+                # İkincil Y ekseni ayarları ve etiketi
+                if secondary_params:
+                    secondary_units = list(set([units_dict.get(p, "") for p in secondary_params if units_dict.get(p, "")]))
+                    if len(secondary_units) == 1:
+                        yaxis2_title = f"Değer ({secondary_units[0]})"
+                    elif len(secondary_units) > 1:
+                        yaxis2_title = f"Değer ({', '.join(secondary_units)})"
+                    else:
+                        yaxis2_title = "Değer"
+                    
+                    fig.update_layout(yaxis2=dict(overlaying='y', side='right', title=yaxis2_title))
+                elif any(yaxis == 'y2' for yaxis in yaxis_assignments.values()):
                     fig.update_layout(yaxis2=dict(overlaying='y', side='right'))
                 
                 # X eksenini özel formatla
@@ -508,19 +611,25 @@ if uploaded_file:
             
             st.plotly_chart(fig, use_container_width=True)
             
-
-
             # Betimleyici İstatistikler (Genişletilmiş)
             st.subheader("Betimleyici İstatistikler")
             if selected_params:
                 # Histogram için parametre seçimi
                 col1, col2 = st.columns([2, 1])
                 with col1:
-                    histogram_param = st.selectbox(
+                    histogram_param_options = [get_param_with_unit(param, units_dict) for param in selected_params]
+                    histogram_param_with_unit = st.selectbox(
                         "Histogram için parametre seçin:", 
-                        selected_params, 
+                        histogram_param_options, 
                         key="histogram_param"
                     )
+                    # Orijinal parametre adını bul
+                    histogram_param = None
+                    for param in selected_params:
+                        if get_param_with_unit(param, units_dict) == histogram_param_with_unit:
+                            histogram_param = param
+                            break
+                
                 with col2:
                     show_histogram = st.checkbox("Histogram Göster", value=False, key="show_histogram")
                     if show_histogram:
@@ -538,8 +647,10 @@ if uploaded_file:
                             skewness_val = series.skew()
                             kurtosis_val = series.kurtosis()
                             
+                            param_with_unit = get_param_with_unit(param, units_dict)
+                            
                             stats_data.append({
-                                'Parametre': param,
+                                'Parametre': param_with_unit,
                                 'Count': len(series),
                                 'Mean': mean_val,
                                 'Median': series.median(),
@@ -589,10 +700,11 @@ if uploaded_file:
                     # Her parametre için yorum tablosu
                     interpretation_data = []
                     for param in selected_params:
-                        if param in detailed_stats_df.index:
-                            skew_val = detailed_stats_df.loc[param, 'Skewness']
-                            kurt_val = detailed_stats_df.loc[param, 'Kurtosis']
-                            cv_val = detailed_stats_df.loc[param, 'CV (%)']
+                        param_with_unit = get_param_with_unit(param, units_dict)
+                        if param_with_unit in detailed_stats_df.index:
+                            skew_val = detailed_stats_df.loc[param_with_unit, 'Skewness']
+                            kurt_val = detailed_stats_df.loc[param_with_unit, 'Kurtosis']
+                            cv_val = detailed_stats_df.loc[param_with_unit, 'CV (%)']
                             
                             # Skewness yorumu
                             if abs(skew_val) < 0.5:
@@ -621,7 +733,7 @@ if uploaded_file:
                                 cv_interpretation = "Yüksek değişkenlik"
                             
                             interpretation_data.append({
-                                'Parametre': param,
+                                'Parametre': param_with_unit,
                                 'Çarpıklık (Skewness)': f"{format_number(skew_val, decimal_separator, False)} - {skew_interpretation}",
                                 'Basıklık (Kurtosis)': f"{format_number(kurt_val, decimal_separator, False)} - {kurt_interpretation}",
                                 'Değişim Katsayısı': f"{format_number(cv_val, decimal_separator, False) if not np.isinf(cv_val) else '∞'}% - {cv_interpretation}"
@@ -663,9 +775,11 @@ if uploaded_file:
                         - **Yüksek Değişkenlik:** Veri noktaları ortalamadan oldukça uzağa yayılmıştır. Veri seti tutarsızdır veya büyük dalgalanmalar göstermektedir.
                         - **Tanımsız:** Ortalama değer sıfır ise standart sapmayı sıfıra bölmek matematiksel olarak tanımsız olduğundan bu katsayı hesaplanamaz.
                         """)
+                
                 # Histogram ve Bin Analizi
-                if show_histogram and histogram_param in df_resampled.columns:
-                    st.subheader(f"Histogram Analizi: {histogram_param}")
+                if show_histogram and histogram_param and histogram_param in df_resampled.columns:
+                    histogram_param_with_unit = get_param_with_unit(histogram_param, units_dict)
+                    st.subheader(f"Histogram Analizi: {histogram_param_with_unit}")
                     
                     series_for_hist = df_resampled[histogram_param].dropna()
                     
@@ -677,7 +791,7 @@ if uploaded_file:
                         fig_hist.add_trace(go.Histogram(
                             x=series_for_hist,
                             nbinsx=bin_count,
-                            name=histogram_param,
+                            name=histogram_param_with_unit,
                             marker_color='skyblue',
                             marker_line_color='darkblue',
                             marker_line_width=1
@@ -698,9 +812,13 @@ if uploaded_file:
                             line_color="green"
                         )
                         
+                        # X eksenine birim ekle
+                        unit = units_dict.get(histogram_param, "")
+                        x_title = f"Değer ({unit})" if unit else "Değer"
+                        
                         fig_hist.update_layout(
-                            title=f"{histogram_param} - Frekans Dağılımı",
-                            xaxis_title="Değer",
+                            title=f"{histogram_param_with_unit} - Frekans Dağılımı",
+                            xaxis_title=x_title,
                             yaxis_title="Frekans",
                             showlegend=False
                         )
@@ -708,11 +826,12 @@ if uploaded_file:
                         st.plotly_chart(fig_hist, use_container_width=True)
                         
                         # Histogram lejandı
+                        unit_display = f" {unit}" if unit else ""
                         st.markdown(f"""
                         <div style="background-color: var(--secondary-background-color); border: 1px solid var(--gray-30); padding: 10px; border-radius: 5px; margin-top: -10px;">
                         <small>
-                        <span style="color: red;">━ ━ ━</span> <strong>Ortalama:</strong> {format_number(mean_val, decimal_separator, False)} &nbsp;&nbsp;&nbsp;
-                        <span style="color: green;">━ ━ ━</span> <strong>Medyan:</strong> {format_number(median_val, decimal_separator, False)}
+                        <span style="color: red;">━ ━ ━</span> <strong>Ortalama:</strong> {format_number(mean_val, decimal_separator, False)}{unit_display} &nbsp;&nbsp;&nbsp;
+                        <span style="color: green;">━ ━ ━</span> <strong>Medyan:</strong> {format_number(median_val, decimal_separator, False)}{unit_display}
                         </small>
                         </div>
                         """, unsafe_allow_html=True)
@@ -754,7 +873,8 @@ if uploaded_file:
                         max_freq_idx = np.argmax(hist_counts)
                         max_bin_start = format_number(bin_edges[max_freq_idx], decimal_separator, False)
                         max_bin_end = format_number(bin_edges[max_freq_idx + 1], decimal_separator, False)
-                        st.info(f"**En Yüksek Frekanslı Aralık:**\n[{max_bin_start}, {max_bin_end})")
+                        unit_display = f" {unit}" if unit else ""
+                        st.info(f"**En Yüksek Frekanslı Aralık:**\n[{max_bin_start}, {max_bin_end}){unit_display}")
                     
             # Outlier Analizi Sonuçları
             if remove_outliers:
@@ -769,15 +889,21 @@ if uploaded_file:
                         
                         if len(outliers) > 0:
                             # Outlier detayları için
+                            param_with_unit = get_param_with_unit(param, units_dict)
+                            unit = units_dict.get(param, "")
                             for date, value in outliers.items():
+                                formatted_value = format_number(value, decimal_separator, True)
+                                if unit:
+                                    formatted_value += f" {unit}"
                                 outlier_data_all.append({
-                                    'Tarih': date.strftime('%Y-%m-%d'),  # Sadece tarih kısmı
-                                    'Parametre': param,
-                                    'Değer': format_number(value, decimal_separator, True)
+                                    'Tarih': date.strftime('%Y-%m-%d'),
+                                    'Parametre': param_with_unit,
+                                    'Değer': formatted_value
                                 })
                         
+                        param_with_unit = get_param_with_unit(param, units_dict)
                         outlier_details.append({
-                            'Parametre': param,
+                            'Parametre': param_with_unit,
                             'Toplam Veri': len(original_series),
                             'Outlier Sayısı': len(outliers),
                             'Outlier Oranı (%)': round(len(outliers)/len(original_series)*100, 2) if len(original_series) > 0 else 0
@@ -788,7 +914,6 @@ if uploaded_file:
                 with col1:
                     st.write("**Outlier Özeti**")
                     outlier_summary_df = pd.DataFrame(outlier_details)
-                    # **YENİ: data_editor kullan**
                     st.data_editor(
                         outlier_summary_df,
                         use_container_width=True,
@@ -809,7 +934,6 @@ if uploaded_file:
                             {'Yıl': year, 'Outlier Sayısı': count} 
                             for year, count in sorted(outlier_yearly.items())
                         ])
-                        # **YENİ: data_editor kullan**
                         st.data_editor(
                             yearly_outlier_df,
                             use_container_width=True,
@@ -823,7 +947,6 @@ if uploaded_file:
                         st.write("**Tespit Edilen Outlier Değerler**")
                         outlier_details_df = pd.DataFrame(outlier_data_all)
                         outlier_details_df = outlier_details_df.sort_values(['Parametre', 'Tarih'])
-                        # **YENİ: data_editor kullan**
                         st.data_editor(
                             outlier_details_df,
                             use_container_width=True,
@@ -838,6 +961,12 @@ if uploaded_file:
                 # Seçilen tarih aralığı ve parametreler için tüm veriyi göster
                 display_data = df_resampled[selected_params].copy()
                 display_data.index.name = 'Tarih'
+                
+                # Kolon isimlerini birimlerle güncelle
+                new_columns = {}
+                for col in display_data.columns:
+                    new_columns[col] = get_param_with_unit(col, units_dict)
+                display_data = display_data.rename(columns=new_columns)
                 
                 # Tarihi formatla - sadece tarih kısmını göster
                 display_data_copy = display_data.copy()
@@ -860,17 +989,16 @@ if uploaded_file:
                 # Formatlanmış veri tablosu
                 formatted_display = format_dataframe(display_data_copy, decimal_separator, True)
                 
-                # **YENİ: data_editor kullan - kopyala yapıştır için daha uygun**
                 st.data_editor(
                     formatted_display,
                     use_container_width=True,
                     hide_index=False,
-                    disabled=True,  # Düzenleme yapılmasın
+                    disabled=True,
                     key="main_data_table"
                 )
                 
                 # Veri indirme seçeneği (UTF-8 encoding ile)
-                csv = display_data_copy.to_csv(encoding='utf-8-sig')  # UTF-8 BOM ile
+                csv = display_data_copy.to_csv(encoding='utf-8-sig')
                 st.download_button(
                     label="Veriyi CSV olarak indir",
                     data=csv,
@@ -890,7 +1018,18 @@ if uploaded_file:
 
         if selected_plant_lstm:
             params_for_plant = sorted([c for c in data_cols if c.startswith(selected_plant_lstm)])
-            selected_param_lstm = st.selectbox("Tahmin Edilecek Parametreyi Seçin", params_for_plant, key="param_lstm")
+            
+            # Parametreleri birimlerle göster
+            param_options_lstm = []
+            param_mapping_lstm = {}
+            for param in params_for_plant:
+                param_with_unit = get_param_with_unit(param, units_dict)
+                param_options_lstm.append(param_with_unit)
+                param_mapping_lstm[param_with_unit] = param
+            
+            selected_param_lstm_with_unit = st.selectbox("Tahmin Edilecek Parametreyi Seçin", param_options_lstm, key="param_lstm")
+            selected_param_lstm = param_mapping_lstm[selected_param_lstm_with_unit]
+            
             forecast_days = st.slider("Gelecek Kaç Gün Tahmin Edilsin?", min_value=7, max_value=90, value=30, key="forecast_days")
             time_step = 60
 
@@ -901,9 +1040,14 @@ if uploaded_file:
                 if model is None:
                     st.error(rmse)
                 else:
+                    unit = units_dict.get(selected_param_lstm, "")
+                    rmse_display = f"{rmse:.4f}"
+                    if unit:
+                        rmse_display += f" {unit}"
+                    
                     st.metric(
                         label="Modelin Eğitim Verisi Üzerindeki Başarısı (RMSE)",
-                        value=f"{rmse:.4f}",
+                        value=rmse_display,
                         help="Kök Ortalama Kare Hata (RMSE): Modelin tahminlerinin gerçek değerlerden ortalama ne kadar saptığını gösterir. Düşük değer daha iyi performansa işaret eder."
                     )
                     
@@ -919,9 +1063,15 @@ if uploaded_file:
                         fig_forecast = go.Figure()
                         fig_forecast.add_trace(go.Scatter(x=series_for_forecast.index, y=series_for_forecast.values, mode='lines', name='Geçmiş Veriler'))
                         fig_forecast.add_trace(go.Scatter(x=future_dates, y=forecast_values, mode='lines', name='Tahmin Edilen Değerler', line=dict(color='red', dash='dash')))
+                        
+                        # Y eksenine birim ekle
+                        y_title = f"Değer ({unit})" if unit else "Değer"
+                        
                         fig_forecast.update_layout(
-                            title=f"{selected_plant_lstm} - '{selected_param_lstm}' Parametresi Tahmini",
-                            xaxis_title="Tarih", yaxis_title="Değer", legend_title="Veri Tipi"
+                            title=f"{selected_plant_lstm} - '{selected_param_lstm_with_unit}' Parametresi Tahmini",
+                            xaxis_title="Tarih", 
+                            yaxis_title=y_title, 
+                            legend_title="Veri Tipi"
                         )
                         st.plotly_chart(fig_forecast, use_container_width=True)
 
@@ -929,14 +1079,18 @@ if uploaded_file:
                         # Tarih formatını düzenle
                         df_forecast['Tarih'] = df_forecast['Tarih'].dt.strftime('%Y-%m-%d')
                         
-                        # Tahmin değerlerini formatla
+                        # Tahmin değerlerini formatla ve birim ekle
                         df_forecast_formatted = df_forecast.copy()
-                        df_forecast_formatted['Tahmin Edilen Değer'] = df_forecast_formatted['Tahmin Edilen Değer'].apply(
-                            lambda x: format_number(x, decimal_separator, True)
-                        )
+                        if unit:
+                            df_forecast_formatted['Tahmin Edilen Değer'] = df_forecast_formatted['Tahmin Edilen Değer'].apply(
+                                lambda x: f"{format_number(x, decimal_separator, True)} {unit}"
+                            )
+                        else:
+                            df_forecast_formatted['Tahmin Edilen Değer'] = df_forecast_formatted['Tahmin Edilen Değer'].apply(
+                                lambda x: format_number(x, decimal_separator, True)
+                            )
                         
                         st.subheader(f"Gelecek {forecast_days} Günlük Tahmin Değerleri")
-                        # **YENİ: data_editor kullan**
                         st.data_editor(
                             df_forecast_formatted.set_index('Tarih'),
                             use_container_width=True,
