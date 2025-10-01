@@ -291,49 +291,36 @@ if uploaded_file:
     @st.cache_data
     def load_data_with_units(file):
         encodings = ['utf-8', 'latin1', 'cp1254']
-        separators = [',', ';', '\t']
+        separators = [';', '\t', ',']
         
         for enc in encodings:
             for sep in separators:
                 try:
                     file.seek(0)
-                    
-                    # İlk satırı (birimler) oku
                     units_row = pd.read_csv(file, encoding=enc, sep=sep, nrows=1, header=None)
-                    
-                    # Dosyayı başa al
+
+                    if units_row.shape[1] <= 1:
+                        continue
+                        
                     file.seek(0)
-                    
-                    # İkinci satırı (başlıklar) oku
                     headers_row = pd.read_csv(file, encoding=enc, sep=sep, nrows=1, skiprows=1, header=None)
-                    
-                    # Dosyayı başa al ve veriyi oku (ilk 2 satırı atla)
                     file.seek(0)
                     df = pd.read_csv(file, encoding=enc, sep=sep, skiprows=2, header=None)
-                    
-                    # Başlıkları ayarla
                     df.columns = headers_row.iloc[0].values
                     df.columns = df.columns.map(str).str.strip()
-                    
-                    # Birimler sözlüğünü oluştur
                     units_dict = {}
-                    if len(units_row.columns) > 1:  # İlk sütun tarih, sonrakiler parametreler
-                        param_columns = headers_row.iloc[0].values[1:]  # İlk sütun tarih
-                        unit_values = units_row.iloc[0].values[1:]  # İlk sütun boş olabilir
-                        
+                    if len(units_row.columns) > 1:
+                        param_columns = headers_row.iloc[0].values[1:]
+                        unit_values = units_row.iloc[0].values[1:]
                         for i, param in enumerate(param_columns):
                             if i < len(unit_values) and pd.notna(unit_values[i]):
                                 units_dict[str(param).strip()] = str(unit_values[i]).strip()
                             else:
                                 units_dict[str(param).strip()] = ""
-                    
                     return df, units_dict
-                    
                 except Exception as e:
                     continue
-        
         return None, None
-
     df_initial, units_dict = load_data_with_units(uploaded_file)
 
     if df_initial is None:
