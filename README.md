@@ -24,7 +24,11 @@ streamlit run ATKAR.py
 
 sonrasında bu bat dosyasının kısayolunu alıp masaüstünüze koyabilirsiniz.
 
-CSV FORMATI
+XLSX FORMATI
 -------------------------------------------------------------
-Upload edeceğiniz CSV dökümanı en başında tarih olacak şekilde ilk satırda başlıklar ve sonraki satırlarda veri olmalı. CSV deki hücre formatı GENERAL şeçilmeli.
-Ondalık ayıracının ne olduğu önemli değil kendi tercihinize göre programdan seçebilirsiniz.
+Uygulama, "Veribankası" adında bir Excel sayfası (tab) içindeki verileri okuyacak şekilde tasarlanmıştır.
+
+- **1. Satır:** Parametrelerin birimleri (ilk hücre boş bırakılmalı).
+- **2. Satır:** Başlıklar (ilk sütun tarih, diğerleri parametre adları).
+- **3. Satır ve sonrası:** Tarih ve sayısal veri değerleri.
+- Ondalık ayıracının ne olduğu önemli değildir, program içinden seçilebilir.

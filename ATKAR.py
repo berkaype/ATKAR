@@ -97,6 +97,68 @@ def resample_data(df, selected_params, frequency):
     else:
         return df[selected_params]
 
+def create_percentile_plot(df, title, selected_params, units_dict, decimal_separator):
+    """Belirtilen parametreler için bir Kümülatif Dağılım Fonksiyonu (CDF) grafiği oluşturur."""
+    fig = go.Figure()
+    
+    for param in selected_params:
+        if param in df.columns:
+            series = df[param].dropna()
+            if not series.empty:
+                # Veriyi küçükten büyüğe sırala
+                sorted_series = series.sort_values()
+                # Kümülatif yüzdeyi hesapla
+                cumulative_percentage = np.arange(1, len(sorted_series) + 1) / len(sorted_series) * 100
+                
+                param_with_unit = get_param_with_unit(param, units_dict)
+                fig.add_trace(go.Scatter(x=sorted_series, y=cumulative_percentage, mode='lines', name=param_with_unit))
+    
+    # Eksen başlıklarını güncelle
+    fig.update_layout(title=title, xaxis_title="Değer", yaxis_title="Kümülatif Yüzde (%)", hovermode="x unified")
+    fig.update_yaxes(range=[0, 101]) # Y eksenini 0-100 arasında sabitle
+    return fig
+
+def create_comparison_boxplot(df_rainy, df_not_rainy, param, param_with_unit):
+    """Yağışlı ve yağışsız günler için karşılaştırmalı bir box plot oluşturur."""
+    fig = go.Figure()
+    
+    if not df_rainy.empty and param in df_rainy.columns:
+        fig.add_trace(go.Box(
+            y=df_rainy[param],
+            name='Yağışlı',
+            marker_color='blue',
+            boxmean='sd' # Ortalama ve standart sapmayı göster
+        ))
+        
+    if not df_not_rainy.empty and param in df_not_rainy.columns:
+        fig.add_trace(go.Box(
+            y=df_not_rainy[param],
+            name='Yağışsız',
+            marker_color='orange',
+            boxmean='sd' # Ortalama ve standart sapmayı göster
+        ))
+        
+    fig.update_layout(
+        title=f"Box Plot Karşılaştırması: {param_with_unit}",
+        yaxis_title="Değer",
+        showlegend=False
+    )
+    return fig
+
+def get_boxplot_stats(series):
+    """Bir seriden box plot için istenen istatistikleri hesaplar."""
+    if series.empty:
+        return None
+    stats = {
+        'Minimum': series.min(),
+        'Ortalama': series.mean(),
+        '%75 (Q3)': series.quantile(0.75),
+        '%85': series.quantile(0.85),
+        '%90': series.quantile(0.90),
+        'Maksimum': series.max()
+    }
+    return pd.DataFrame([stats])
+
 def detect_outliers_3sigma(series):
     """3 sigma yöntemi ile outlier'ları tespit eder"""
     mean = series.mean()
@@ -277,54 +339,48 @@ def make_future_forecast(model, scaler, last_data, time_step, forecast_days):
     return forecast_values
 
 # --- Veri Yükleme ---
-st.info("Başlamak için lütfen CSV formatındaki zaman serisi verilerinizi yükleyin.")
+st.info("Başlamak için lütfen XLSX formatındaki zaman serisi verilerinizi yükleyin.")
 st.markdown("""
-**CSV Formatı:**
+**XLSX Formatı ('Veribankası' Sayfası):**
 - 1. satır: Parametrelerin birimleri (ilk hücre boş, sonraki hücreler birimler)
 - 2. satır: Başlıklar (tarih sütunu + parametre adları)
 - 3. satırdan itibaren: Tarih ve veri değerleri
 """)
 
-uploaded_file = st.file_uploader("CSV dosyasını yükleyin", type=["csv"], key="data_uploader")
+uploaded_file = st.file_uploader("XLSX dosyasını yükleyin", type=["xlsx"], key="data_uploader")
 
 if uploaded_file:
     @st.cache_data
     def load_data_with_units(file):
-        encodings = ['utf-8', 'latin1', 'cp1254']
-        separators = [';', '\t', ',']
-        
-        for enc in encodings:
-            for sep in separators:
-                try:
-                    file.seek(0)
-                    units_row = pd.read_csv(file, encoding=enc, sep=sep, nrows=1, header=None)
+        """XLSX dosyasının 'Veribankası' sayfasından verileri, birimleri ve başlıkları okur."""
+        try:
+            file.seek(0)
+            units_row = pd.read_excel(file, sheet_name="Veribankası", header=None, nrows=1)
+            file.seek(0)
+            headers_row = pd.read_excel(file, sheet_name="Veribankası", header=None, nrows=1, skiprows=1)
+            file.seek(0)
+            df = pd.read_excel(file, sheet_name="Veribankası", header=None, skiprows=2)
 
-                    if units_row.shape[1] <= 1:
-                        continue
-                        
-                    file.seek(0)
-                    headers_row = pd.read_csv(file, encoding=enc, sep=sep, nrows=1, skiprows=1, header=None)
-                    file.seek(0)
-                    df = pd.read_csv(file, encoding=enc, sep=sep, skiprows=2, header=None)
-                    df.columns = headers_row.iloc[0].values
-                    df.columns = df.columns.map(str).str.strip()
-                    units_dict = {}
-                    if len(units_row.columns) > 1:
-                        param_columns = headers_row.iloc[0].values[1:]
-                        unit_values = units_row.iloc[0].values[1:]
-                        for i, param in enumerate(param_columns):
-                            if i < len(unit_values) and pd.notna(unit_values[i]):
-                                units_dict[str(param).strip()] = str(unit_values[i]).strip()
-                            else:
-                                units_dict[str(param).strip()] = ""
-                    return df, units_dict
-                except Exception as e:
-                    continue
-        return None, None
+            df.columns = headers_row.iloc[0].values
+            df.columns = df.columns.map(str).str.strip()
+            
+            units_dict = {}
+            if len(units_row.columns) > 1:
+                param_columns = headers_row.iloc[0].values[1:]
+                unit_values = units_row.iloc[0].values[1:]
+                for i, param in enumerate(param_columns):
+                    if i < len(unit_values) and pd.notna(unit_values[i]):
+                        units_dict[str(param).strip()] = str(unit_values[i]).strip()
+                    else:
+                        units_dict[str(param).strip()] = ""
+            return df, units_dict
+        except Exception as e:
+            st.error(f"XLSX dosyası okunurken bir hata oluştu: {e}. Lütfen dosyanın 'Veribankası' adında bir sayfa içerdiğinden ve formatın doğru olduğundan emin olun.")
+            return None, None
     df_initial, units_dict = load_data_with_units(uploaded_file)
 
     if df_initial is None:
-        st.error("Dosya okunamadı. Lütfen dosyanızın CSV formatında olduğundan ve doğru ayırıcıyı kullandığından emin olun.")
+        st.error("Dosya okunamadı veya formatı hatalı. Lütfen XLSX dosyasının belirtilen yapıda olduğundan emin olun.")
         st.stop()
     
     # Birimler sözlüğünü göster
@@ -350,11 +406,14 @@ if uploaded_file:
     st.sidebar.header("Veri İşleme Ayarları")
     
     decimal_separator = st.sidebar.radio("Verideki Ondalık Ayırıcı", (",", "."))
-    data_cols = [c for c in df_initial.columns if c != date_col]
+    
+    # "Hava Durumu" kolonunu sayısal parametrelerden ayır
+    weather_col = "Hava Durumu"
+    data_cols = [c for c in df_initial.columns if c != date_col and c != weather_col]
     df_cleaned = df_initial[data_cols].copy()
     
     for col in df_cleaned.columns:
-        if decimal_separator == ',':
+        if decimal_separator == '.':
             df_cleaned[col] = df_cleaned[col].astype(str).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
         df_cleaned[col] = pd.to_numeric(df_cleaned[col], errors='coerce')
     
@@ -648,9 +707,6 @@ if uploaded_file:
                                 'CV (%)': cv_val,  # Coefficient of Variation
                                 'Skewness': skewness_val,
                                 'Kurtosis': kurtosis_val,
-                                '25%': series.quantile(0.25),
-                                '50%': series.quantile(0.50),
-                                '75%': series.quantile(0.75)
                             })
                 
                 if stats_data:
@@ -762,6 +818,65 @@ if uploaded_file:
                         - **Yüksek Değişkenlik:** Veri noktaları ortalamadan oldukça uzağa yayılmıştır. Veri seti tutarsızdır veya büyük dalgalanmalar göstermektedir.
                         - **Tanımsız:** Ortalama değer sıfır ise standart sapmayı sıfıra bölmek matematiksel olarak tanımsız olduğundan bu katsayı hesaplanamaz.
                         """)
+                    
+                    # Yüzdelik Dağılım Grafikleri (Hava Durumuna Göre)
+                    if weather_col in df_initial.columns and time_frequency == "Günlük":
+                        st.subheader("Yüzdelik Dağılım Analizi (Percentile)")
+                        st.info("Bu bölümde, seçilen her bir parametrenin kümülatif değer dağılımı, yağışlı ve yağışsız günlere göre ayrı ayrı karşılaştırılmaktadır. X ekseni parametre değerini, Y ekseni ise o değere kadar olan verinin kümülatif yüzdesini gösterir.")
+                        
+                        # Hava durumu verisini ana veri çerçevesiyle birleştir
+                        df_with_weather = df_for_display.copy()
+                        if weather_col not in df_with_weather.columns:
+                            weather_data = df_initial.loc[df_for_display.index, [weather_col]]
+                            df_with_weather = pd.concat([df_with_weather, weather_data], axis=1)
+                        
+                        df_rainy = df_with_weather[df_with_weather[weather_col] == 'Y']
+                        df_not_rainy = df_with_weather[df_with_weather[weather_col] == 'YD']
+                        
+                        # Seçilen her parametre için ayrı grafikler çiz
+                        for param in selected_params:
+                            param_with_unit = get_param_with_unit(param, units_dict)
+                            
+                            st.markdown("---")
+                            # Başlık ve checkbox'ı dikey olarak hizalı bir şekilde yan yana koy
+                            col_title, col_checkbox = st.columns([2, 1], vertical_alignment="bottom")
+                            col_title.markdown(f"#### Analiz: {param_with_unit}")
+                            show_boxplot = col_checkbox.checkbox("Box Plot Analizi Göster", key=f"boxplot_{param}", help=f"'{param_with_unit}' için yağışlı ve yağışsız günlerin dağılımını kutu grafiği ile karşılaştırın.")
+                            
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                if not df_rainy.empty:
+                                    fig_rainy = create_percentile_plot(df_rainy, "Yağışlı Günler Dağılımı", [param], units_dict, decimal_separator)
+                                    st.plotly_chart(fig_rainy, use_container_width=True)
+                            
+                            with col2:
+                                if not df_not_rainy.empty:
+                                    fig_not_rainy = create_percentile_plot(df_not_rainy, "Yağışsız Günler Dağılımı", [param], units_dict, decimal_separator)
+                                    st.plotly_chart(fig_not_rainy, use_container_width=True)
+                            
+                            # Box Plot Analizi
+                            if show_boxplot:
+                                st.markdown("##### Box Plot Analizi")
+                                
+                                # Box plot grafiği
+                                box_fig = create_comparison_boxplot(df_rainy, df_not_rainy, param, param_with_unit)
+                                st.plotly_chart(box_fig, use_container_width=True)
+                                
+                                # İstatistik tabloları
+                                stats_rainy = get_boxplot_stats(df_rainy[param].dropna())
+                                stats_not_rainy = get_boxplot_stats(df_not_rainy[param].dropna())
+                                
+                                col_stat1, col_stat2 = st.columns(2)
+                                if stats_rainy is not None:
+                                    with col_stat1:
+                                        st.write("**Yağışlı Günler İstatistikleri**")
+                                        st.dataframe(format_dataframe(stats_rainy, decimal_separator, True), hide_index=True, use_container_width=True)
+                                if stats_not_rainy is not None:
+                                    with col_stat2:
+                                        st.write("**Yağışsız Günler İstatistikleri**")
+                                        st.dataframe(format_dataframe(stats_not_rainy, decimal_separator, True), hide_index=True, use_container_width=True)
+
                 
                 # Histogram ve Bin Analizi
                 if show_histogram and histogram_param and histogram_param in df_resampled.columns:
@@ -1089,4 +1204,4 @@ if uploaded_file:
                     st.success("Tahmin işlemi başarıyla tamamlandı!")
 
 else:
-    st.warning("Lütfen analiz ve tahmin işlemlerine başlamak için bir CSV dosyası yükleyin.")
+    st.warning("Lütfen analiz ve tahmin işlemlerine başlamak için bir XLSX dosyası yükleyin.")
