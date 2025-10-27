@@ -6,4 +6,3 @@ LTSM sekmesinde copy paste çalışıyor mu kontrol et. dataframe de data editor
 
 
 ########################################################
-

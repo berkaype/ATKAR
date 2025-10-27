@@ -346,6 +346,15 @@ st.markdown("""
 - 2. satır: Başlıklar (tarih sütunu + parametre adları)
 - 3. satırdan itibaren: Tarih ve veri değerleri
 """)
+st.markdown("""
+**"Kirlilik Yükleri Deşarj Noktaları" sekmesi için ek format ('Marmara' Sayfası):**
+- Bu sekmenin çalışması için Excel dosyanızda "Marmara" adında bir sayfa bulunmalıdır.
+- **A Sütunu:** Tesis isimleri (Başlık: `Tesis Adı`)
+- **B Sütunu:** Tesisin Marmara Denizi'ne deşarjı olup olmadığı (Başlık: `Marmaraya Olan Etkisi`). 
+  - Değeri `VAR` olanlar "Marmara Denizi'ne Deşarj" olarak gruplanacaktır.
+  - Diğer tüm değerler "İstanbul Boğazı'na Deşarj" olarak gruplanacaktır.
+""")
+
 
 uploaded_file = st.file_uploader("XLSX dosyasını yükleyin", type=["xlsx"], key="data_uploader")
 
@@ -353,7 +362,7 @@ if uploaded_file:
     @st.cache_data
     def load_data_with_units(file):
         """XLSX dosyasının 'Veribankası' sayfasından verileri, birimleri ve başlıkları okur."""
-        try:
+        try: # Veribankası sayfasını oku
             file.seek(0)
             units_row = pd.read_excel(file, sheet_name="Veribankası", header=None, nrows=1)
             file.seek(0)
@@ -373,16 +382,26 @@ if uploaded_file:
                         units_dict[str(param).strip()] = str(unit_values[i]).strip()
                     else:
                         units_dict[str(param).strip()] = ""
-            return df, units_dict
+            
         except Exception as e:
             st.error(f"XLSX dosyası okunurken bir hata oluştu: {e}. Lütfen dosyanın 'Veribankası' adında bir sayfa içerdiğinden ve formatın doğru olduğundan emin olun.")
-            return None, None
-    df_initial, units_dict = load_data_with_units(uploaded_file)
+            return None, None, None
+
+        try: # Marmara sayfasını oku
+            file.seek(0)
+            df_marmara = pd.read_excel(file, sheet_name="Marmara")
+        except Exception:
+            # Marmara sayfası yoksa None döndür, hata verme
+            df_marmara = None
+            
+        return df, units_dict, df_marmara
+
+    df_initial, units_dict, df_marmara = load_data_with_units(uploaded_file)
 
     if df_initial is None:
         st.error("Dosya okunamadı veya formatı hatalı. Lütfen XLSX dosyasının belirtilen yapıda olduğundan emin olun.")
         st.stop()
-    
+
     # Birimler sözlüğünü göster
     if units_dict:
         with st.expander("Tespit Edilen Parametre Birimleri"):
@@ -427,7 +446,8 @@ if uploaded_file:
         df_cleaned.interpolate(method='linear', limit_direction='both', inplace=True)
 
     # --- Sekmeleri Oluştur ---
-    tab1, tab2 = st.tabs(["Veri Görselleştirme ve Karşılaştırma", "Zaman Serisi Tahmini (LSTM)"])
+    tabs = st.tabs(["Veri Görselleştirme ve Karşılaştırma", "Zaman Serisi Tahmini (LSTM)", "Kirlilik Yükleri Deşarj Noktaları"])
+    tab1, tab2, tab3 = tabs[0], tabs[1], tabs[2]
 
     # ============================ SEKME 1: GÖRSELLEŞTİRME ============================
     with tab1:
@@ -1224,6 +1244,212 @@ if uploaded_file:
                         )
 
                     st.success("Tahmin işlemi başarıyla tamamlandı!")
+
+    # ============================ SEKME 3: KİRLİLİK YÜKLERİ ============================
+    with tab3:
+        st.header("Kirlilik Yükleri ve Deşarj Noktaları Analizi")
+
+        if df_marmara is None:
+            st.warning("Bu analizi yapabilmek için lütfen Excel dosyanızda 'Marmara' adında bir sayfa bulunduğundan emin olun.")
+            st.info("""
+            **'Marmara' Sayfası Formatı:**
+            - **A Sütunu (Başlık: Tesis Adı):** 'Veribankası' sayfasındaki tesis adlarıyla eşleşen tesis adları.
+            - **B Sütunu (Başlık: Marmaraya Olan Etkisi):** Deşarjın Marmara Denizi'ne direkt olup olmadığını belirtir. Değeri 'VAR' olanlar Marmara'ya deşarj olarak kabul edilir.
+            """)
+            st.stop()
+
+        # Marmara verisini işle
+        try:
+            # Sütun adlarındaki boşlukları temizle ve küçük harfe çevir
+            df_marmara.columns = df_marmara.columns.str.strip()
+            df_marmara.columns = df_marmara.columns.str.lower()
+
+            expected_tesis_col = 'tesis adı'
+            expected_etki_col = 'marmaraya etkisi'
+
+            if expected_tesis_col not in df_marmara.columns or expected_etki_col not in df_marmara.columns:
+                raise ValueError(
+                    f"'{expected_tesis_col.title()}' veya '{expected_etki_col.title()}' "
+                    f"sütunları 'Marmara' sayfasında bulunamadı. "
+                    f"Mevcut sütunlar: {', '.join(df_marmara.columns.tolist())}"
+                )
+
+            df_marmara['Grup'] = df_marmara[expected_etki_col].apply(
+                lambda x: "Marmara Denizi'ne Deşarj" if str(x).strip().upper() == 'VAR' else "İstanbul Boğazı'na Deşarj"
+            )
+            # Eşleştirme için küçük harfli anahtarlar, gösterim için orijinal adlar kullan
+            tesis_gruplari = {
+                str(row[expected_tesis_col]).strip().lower(): row['Grup']
+                for _, row in df_marmara.iterrows()
+            }
+
+        except Exception as e:
+            st.error(f"'Marmara' sayfası işlenirken bir hata oluştu: {e}")
+            st.stop()
+
+        st.info("Bu bölümde, 'Veribankası' sayfasındaki tesislerin günlük ortalama debi ve konsantrasyon değerleri kullanılarak hesaplanan kirlilik yükleri, 'Marmara' sayfasındaki bilgilere göre gruplandırılarak sunulmaktadır.")
+
+        # Tesisleri gruplara ayır ve listele
+        if tesis_gruplari:
+            summary_data = []
+            all_marmara_plants = df_marmara[expected_tesis_col].str.strip().tolist()
+            
+            # Veri setindeki tüm yılları bul
+            available_years = sorted(df_cleaned.index.year.unique())
+
+            for plant_name_original in all_marmara_plants:
+                plant_name_lower = plant_name_original.lower()
+                grup = tesis_gruplari.get(plant_name_lower, "Bilinmeyen Grup")
+                plant_data = {'Tesis Adı': plant_name_original, 'Grup': grup}
+
+                for year in available_years:
+                    df_year = df_cleaned[df_cleaned.index.year == year]
+                    if df_year.empty:
+                        continue
+
+                    # --- Yıllık Debi Hesaplama Mantığı ---
+                    debi_series = pd.Series(dtype=float)
+                    base_plant_name = plant_name_original.split(' ')[0]
+
+                    if plant_name_original.endswith("Bypass"):
+                        # Bypass tesisleri için: Toplam Debi - Proses Debileri
+                        toplam_debi_col = f"{base_plant_name} Toplam Debi"
+                        if toplam_debi_col in df_year.columns:
+                            debi_series = df_year[toplam_debi_col].copy()
+                            
+                            # Çıkarılacak proses/debi kolonlarını bul
+                            cols_to_subtract = []
+                            for col in df_year.columns:
+                                # Kolon base_plant_name ile başlıyor ve "Proses Debisi" veya "Debi" içeriyorsa
+                                # VE Toplam Debi kolonu değilse
+                                if col.startswith(base_plant_name) and \
+                                   ("Proses Debisi" in col or ("Debi" in col and "Toplam" not in col)) and \
+                                   col != toplam_debi_col:
+                                    cols_to_subtract.append(col)
+                            
+                            # Tekrar edenleri önlemek için set kullan ve çıkar
+                            for col in list(set(cols_to_subtract)):
+                                debi_series -= df_year[col].fillna(0)
+                        
+                    else: # Diğer tüm tesisler (sonu I, II, III ile bitenler ve standart tesisler)
+                        # Potansiyel debi kolon adlarını tercih sırasına göre tanımla
+                        # Roma rakamının sonda olduğu formatları da ekle
+                        plant_parts = plant_name_original.split(' ')
+                        roman_numeral = plant_parts[-1] if len(plant_parts) > 1 and plant_parts[-1] in ["I", "II", "III"] else None
+
+                        potential_debi_cols = [
+                            f"{plant_name_original} Proses Debisi", # Örn: Tuzla I Proses Debisi
+                            f"{plant_name_original} Debi",         # Örn: Tuzla I Debi
+                        ]
+                        if roman_numeral:
+                            potential_debi_cols.extend([
+                                f"{base_plant_name} Proses Debisi {roman_numeral}", # Örn: Tuzla Proses Debisi I
+                                f"{base_plant_name} Debi {roman_numeral}"          # Örn: Tuzla Debi I
+                            ])
+                        potential_debi_cols.extend([
+                            f"{base_plant_name} Proses Debisi", # Örn: Ambarlı Proses Debisi
+                            f"{base_plant_name} Debi"          # Örn: Ambarlı Debi
+                        ])
+                        
+                        found_debi_col = None
+                        for col_name in potential_debi_cols:
+                            if col_name in df_year.columns:
+                                found_debi_col = col_name
+                                break
+                        
+                        if found_debi_col:
+                            debi_series = df_year[found_debi_col]
+
+                    avg_debi = debi_series.mean()
+                    plant_data[f'Debi {year} (m³/gün)'] = avg_debi
+
+                    # --- Yıllık Yük Hesaplama Mantığı ---
+                    # Yük parametrelerini ve hedef kolon adlarını tanımla (KOI ve KOİ için arama yap)
+                    load_params = {
+                        'Karbon Yükü': ['KOI', 'KOİ'],
+                        'Azot Yükü': ['TN'],
+                        'Fosfor Yükü': ['TP']
+                    }
+
+                    is_bypass_plant = plant_name_original.endswith("Bypass")
+
+                    for load_name, param_aliases in load_params.items():
+                        found_conc_col = None
+                        # Olası konsantrasyon kolon adlarını ara
+                        potential_conc_cols = []
+                        for alias in param_aliases:
+                            plant_parts = plant_name_original.split(' ')
+                            roman_numeral = plant_parts[-1] if len(plant_parts) > 1 and plant_parts[-1] in ["I", "II", "III"] else None
+
+                            if is_bypass_plant: # Bypass Tesisleri
+                                potential_conc_cols.extend([
+                                    f"{base_plant_name} {alias} Giriş",
+                                    f"{base_plant_name} {alias}"
+                                ])
+                            elif roman_numeral: # I, II, III'lü Tesisler
+                                potential_conc_cols.extend([
+                                    f"{plant_name_original} {alias} Çıkış",
+                                    f"{plant_name_original} {alias}",
+                                    f"{base_plant_name} {alias} Çıkış {roman_numeral}",
+                                    f"{base_plant_name} {alias} {roman_numeral}"
+                                ])
+                            else: # Standart Tesisler
+                                potential_conc_cols.extend([
+                                    f"{plant_name_original} {alias} Çıkış",
+                                    f"{plant_name_original} {alias}"
+                                ])
+                        
+                        for col_name in potential_conc_cols:
+                            if col_name in df_year.columns:
+                                found_conc_col = col_name
+                                break
+                        
+                        # Fallback: Eğer 'III' için kolon bulunamazsa, 'II'yi ara
+                        if not found_conc_col and plant_name_original.endswith(" III"):
+                            plant_ii_name = plant_name_original.replace(" III", " II")
+                            base_plant_name_ii = plant_ii_name.split(' ')[0]
+                            fallback_cols = []
+                            for alias in param_aliases:
+                                fallback_cols.extend([
+                                    f"{plant_ii_name} {alias} Çıkış",
+                                    f"{plant_ii_name} {alias}",
+                                    f"{base_plant_name_ii} {alias} Çıkış II",
+                                    f"{base_plant_name_ii} {alias} II"
+                                ])
+                            for col_name in fallback_cols:
+                                if col_name in df_year.columns:
+                                    found_conc_col = col_name
+                                    break
+
+                        # Yükü hesapla ve veriye ekle
+                        if found_conc_col:
+                            avg_conc = df_year[found_conc_col].mean()
+                            load_value = (avg_debi * avg_conc) / 1000 if pd.notna(avg_debi) and pd.notna(avg_conc) else np.nan
+                            plant_data[f'{load_name} {year} (kg/gün)'] = load_value
+                        else:
+                            # Kolon bulunamazsa boş değer ata
+                            plant_data[f'{load_name} {year} (kg/gün)'] = np.nan
+
+
+                
+                summary_data.append(plant_data)
+            
+            if summary_data:
+                summary_df = pd.DataFrame(summary_data)
+                # Tekrar eden satırları kaldır (her yıl için bir satır oluşmasını engelle)
+                summary_df = summary_df.groupby(['Tesis Adı', 'Grup']).first().reset_index()
+                summary_df = summary_df.sort_values(by=['Grup', 'Tesis Adı'])
+                
+                # Gruplara göre göster
+                for grup_adi, grup_df in summary_df.groupby('Grup'):
+                    st.subheader(grup_adi)
+                    df_to_display = grup_df.drop(columns=['Grup']).set_index('Tesis Adı')
+                    st.dataframe(df_to_display.style.format(formatter="{:,.2f}", na_rep="-"), use_container_width=True)
+            else:
+                st.warning("Özet verisi oluşturulamadı.")
+        else:
+            st.warning("'Marmara' sayfasında gruplandırılacak tesis bulunamadı.")
+
 
 else:
     st.warning("Lütfen analiz ve tahmin işlemlerine başlamak için bir XLSX dosyası yükleyin.")
