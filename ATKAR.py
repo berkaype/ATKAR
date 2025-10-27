@@ -822,61 +822,83 @@ if uploaded_file:
                     # Yüzdelik Dağılım Grafikleri (Hava Durumuna Göre)
                     if weather_col in df_initial.columns and time_frequency == "Günlük":
                         st.subheader("Yüzdelik Dağılım Analizi (Percentile)")
-                        st.info("Bu bölümde, seçilen her bir parametrenin kümülatif değer dağılımı, yağışlı ve yağışsız günlere göre ayrı ayrı karşılaştırılmaktadır. X ekseni parametre değerini, Y ekseni ise o değere kadar olan verinin kümülatif yüzdesini gösterir.")
                         
                         # Hava durumu verisini ana veri çerçevesiyle birleştir
                         df_with_weather = df_for_display.copy()
                         if weather_col not in df_with_weather.columns:
                             weather_data = df_initial.loc[df_for_display.index, [weather_col]]
                             df_with_weather = pd.concat([df_with_weather, weather_data], axis=1)
-                        
-                        df_rainy = df_with_weather[df_with_weather[weather_col] == 'Y']
-                        df_not_rainy = df_with_weather[df_with_weather[weather_col] == 'YD']
-                        
-                        # Seçilen her parametre için ayrı grafikler çiz
-                        for param in selected_params:
-                            param_with_unit = get_param_with_unit(param, units_dict)
-                            
-                            st.markdown("---")
-                            # Başlık ve checkbox'ı dikey olarak hizalı bir şekilde yan yana koy
-                            col_title, col_checkbox = st.columns([2, 1], vertical_alignment="bottom")
-                            col_title.markdown(f"#### Analiz: {param_with_unit}")
-                            show_boxplot = col_checkbox.checkbox("Box Plot Analizi Göster", key=f"boxplot_{param}", help=f"'{param_with_unit}' için yağışlı ve yağışsız günlerin dağılımını kutu grafiği ile karşılaştırın.")
-                            
-                            col1, col2 = st.columns(2)
-                            
-                            with col1:
-                                if not df_rainy.empty:
-                                    fig_rainy = create_percentile_plot(df_rainy, "Yağışlı Günler Dağılımı", [param], units_dict, decimal_separator)
-                                    st.plotly_chart(fig_rainy, use_container_width=True)
-                            
-                            with col2:
-                                if not df_not_rainy.empty:
-                                    fig_not_rainy = create_percentile_plot(df_not_rainy, "Yağışsız Günler Dağılımı", [param], units_dict, decimal_separator)
-                                    st.plotly_chart(fig_not_rainy, use_container_width=True)
-                            
-                            # Box Plot Analizi
-                            if show_boxplot:
-                                st.markdown("##### Box Plot Analizi")
-                                
-                                # Box plot grafiği
-                                box_fig = create_comparison_boxplot(df_rainy, df_not_rainy, param, param_with_unit)
-                                st.plotly_chart(box_fig, use_container_width=True)
-                                
-                                # İstatistik tabloları
-                                stats_rainy = get_boxplot_stats(df_rainy[param].dropna())
-                                stats_not_rainy = get_boxplot_stats(df_not_rainy[param].dropna())
-                                
-                                col_stat1, col_stat2 = st.columns(2)
-                                if stats_rainy is not None:
-                                    with col_stat1:
-                                        st.write("**Yağışlı Günler İstatistikleri**")
-                                        st.dataframe(format_dataframe(stats_rainy, decimal_separator, True), hide_index=True, use_container_width=True)
-                                if stats_not_rainy is not None:
-                                    with col_stat2:
-                                        st.write("**Yağışsız Günler İstatistikleri**")
-                                        st.dataframe(format_dataframe(stats_not_rainy, decimal_separator, True), hide_index=True, use_container_width=True)
 
+                        # Hava durumu verisinin dolu olup olmadığını kontrol et
+                        is_weather_data_available = not df_with_weather[weather_col].dropna().empty
+
+                        if is_weather_data_available:
+                            st.info("Bu bölümde, seçilen her bir parametrenin kümülatif değer dağılımı, yağışlı ve yağışsız günlere göre ayrı ayrı karşılaştırılmaktadır. X ekseni parametre değerini, Y ekseni ise o değere kadar olan verinin kümülatif yüzdesini gösterir.")
+                            df_rainy = df_with_weather[df_with_weather[weather_col] == 'Y']
+                            df_not_rainy = df_with_weather[df_with_weather[weather_col] == 'YD']
+                            
+                            # Seçilen her parametre için ayrı grafikler çiz
+                            for param in selected_params:
+                                param_with_unit = get_param_with_unit(param, units_dict)
+                                
+                                st.markdown("---")
+                                # Başlık ve checkbox'ı dikey olarak hizalı bir şekilde yan yana koy
+                                col_title, col_checkbox = st.columns([2, 1], vertical_alignment="bottom")
+                                col_title.markdown(f"#### Analiz: {param_with_unit}")
+                                show_boxplot = col_checkbox.checkbox("Box Plot Analizi Göster", key=f"boxplot_{param}", help=f"'{param_with_unit}' için yağışlı ve yağışsız günlerin dağılımını kutu grafiği ile karşılaştırın.")
+                                
+                                col1, col2 = st.columns(2)
+                                
+                                with col1:
+                                    if not df_rainy.empty:
+                                        fig_rainy = create_percentile_plot(df_rainy, "Yağışlı Günler Dağılımı", [param], units_dict, decimal_separator)
+                                        st.plotly_chart(fig_rainy, use_container_width=True)
+                                
+                                with col2:
+                                    if not df_not_rainy.empty:
+                                        fig_not_rainy = create_percentile_plot(df_not_rainy, "Yağışsız Günler Dağılımı", [param], units_dict, decimal_separator)
+                                        st.plotly_chart(fig_not_rainy, use_container_width=True)
+                                
+                                # Box Plot Analizi
+                                if show_boxplot:
+                                    st.markdown("##### Box Plot Analizi")
+                                    box_fig = create_comparison_boxplot(df_rainy, df_not_rainy, param, param_with_unit)
+                                    st.plotly_chart(box_fig, use_container_width=True)
+                                    stats_rainy = get_boxplot_stats(df_rainy[param].dropna())
+                                    stats_not_rainy = get_boxplot_stats(df_not_rainy[param].dropna())
+                                    col_stat1, col_stat2 = st.columns(2)
+                                    if stats_rainy is not None:
+                                        with col_stat1:
+                                            st.write("**Yağışlı Günler İstatistikleri**")
+                                            st.dataframe(format_dataframe(stats_rainy, decimal_separator, True), hide_index=True, use_container_width=True)
+                                    if stats_not_rainy is not None:
+                                        with col_stat2:
+                                            st.write("**Yağışsız Günler İstatistikleri**")
+                                            st.dataframe(format_dataframe(stats_not_rainy, decimal_separator, True), hide_index=True, use_container_width=True)
+                        else:
+                            st.info("Hava durumu verisi bulunamadığı için genel dağılım gösterilmektedir. X ekseni parametre değerini, Y ekseni ise o değere kadar olan verinin kümülatif yüzdesini gösterir.")
+                            for param in selected_params:
+                                param_with_unit = get_param_with_unit(param, units_dict)
+                                
+                                st.markdown("---")
+                                # Başlık ve checkbox'ı dikey olarak hizalı bir şekilde yan yana koy
+                                col_title, col_checkbox = st.columns([2, 1], vertical_alignment="bottom")
+                                col_title.markdown(f"#### Analiz: {param_with_unit}")
+                                show_boxplot_general = col_checkbox.checkbox("Box Plot Analizi Göster", key=f"boxplot_general_{param}", help=f"'{param_with_unit}' için genel veri dağılımını kutu grafiği ile analiz edin.")
+
+                                fig_general = create_percentile_plot(df_for_display, "Genel Dağılım", [param], units_dict, decimal_separator)
+                                st.plotly_chart(fig_general, use_container_width=True)
+                                
+                                # Genel Box Plot Analizi
+                                if show_boxplot_general:
+                                    st.markdown("##### Box Plot Analizi (Genel)")
+                                    box_fig_general = create_comparison_boxplot(pd.DataFrame(), df_for_display, param, param_with_unit)
+                                    st.plotly_chart(box_fig_general, use_container_width=True)
+                                    
+                                    stats_general = get_boxplot_stats(df_for_display[param].dropna())
+                                    if stats_general is not None:
+                                        st.write("**Genel Veri İstatistikleri**")
+                                        st.dataframe(format_dataframe(stats_general, decimal_separator, True), hide_index=True, use_container_width=True)
                 
                 # Histogram ve Bin Analizi
                 if show_histogram and histogram_param and histogram_param in df_resampled.columns:
