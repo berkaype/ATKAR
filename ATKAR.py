@@ -1266,11 +1266,12 @@ if uploaded_file:
 
             expected_tesis_col = 'tesis adı'
             expected_etki_col = 'marmaraya etkisi'
+            expected_sinif_col = 'sınıf' # Yeni sınıf kolonu
 
-            if expected_tesis_col not in df_marmara.columns or expected_etki_col not in df_marmara.columns:
+            if not all(col in df_marmara.columns for col in [expected_tesis_col, expected_etki_col, expected_sinif_col]):
                 raise ValueError(
-                    f"'{expected_tesis_col.title()}' veya '{expected_etki_col.title()}' "
-                    f"sütunları 'Marmara' sayfasında bulunamadı. "
+                    f"'{expected_tesis_col.title()}', '{expected_etki_col.title()}' veya '{expected_sinif_col.title()}' "
+                    f"sütunlarından biri 'Marmara' sayfasında bulunamadı. "
                     f"Mevcut sütunlar: {', '.join(df_marmara.columns.tolist())}"
                 )
 
@@ -1281,6 +1282,10 @@ if uploaded_file:
             tesis_gruplari = {
                 str(row[expected_tesis_col]).strip().lower(): row['Grup']
                 for _, row in df_marmara.iterrows()
+            }
+            tesis_siniflari = {
+                str(row[expected_tesis_col]).strip().lower(): str(row[expected_sinif_col]).strip()
+                for _, row in df_marmara.iterrows() if pd.notna(row[expected_sinif_col])
             }
 
         except Exception as e:
@@ -1297,12 +1302,20 @@ if uploaded_file:
             # Veri setindeki tüm yılları bul
             available_years = sorted(df_cleaned.index.year.unique())
 
+            # Yıl seçimi için multiselect ekle
+            selected_years = st.multiselect(
+                "Tabloda Gösterilecek Yılları Seçin:",
+                options=available_years,
+                default=available_years
+            )
+
             for plant_name_original in all_marmara_plants:
                 plant_name_lower = plant_name_original.lower()
                 grup = tesis_gruplari.get(plant_name_lower, "Bilinmeyen Grup")
-                plant_data = {'Tesis Adı': plant_name_original, 'Grup': grup}
+                sinif = tesis_siniflari.get(plant_name_lower, "Bilinmeyen Sınıf")
+                plant_data = {'Tesis Adı': plant_name_original, 'Grup': grup, 'Sınıf': sinif}
 
-                for year in available_years:
+                for year in selected_years: # Sadece seçilen yıllar için döngüye gir
                     df_year = df_cleaned[df_cleaned.index.year == year]
                     if df_year.empty:
                         continue
@@ -1360,8 +1373,23 @@ if uploaded_file:
                         if found_debi_col:
                             debi_series = df_year[found_debi_col]
 
+                    # --- Debi Veri Bütünlüğü Kontrolü ve Başlık Oluşturma ---
+                    days_in_year = pd.to_datetime(f'{year}-12-31').dayofyear
+                    data_count = debi_series.count()
+                    missing_days = days_in_year - data_count
+
+                    debi_col_name = f'Debi {year} (m³/gün)'
+                    if data_count == 0:
+                        # Hiç veri yoksa
+                        debi_col_name = f'Debi {year} (m³/gün)' # İkon eklemeden bırak
+                    elif missing_days == 0:
+                        debi_col_name += " ✅" # Tam veri
+                    else:
+                        debi_col_name += f" ⚠️ ({missing_days} gün)" # Eksik veri
+
+                    # Ortalama debiyi hesapla ve yeni başlıkla ekle
                     avg_debi = debi_series.mean()
-                    plant_data[f'Debi {year} (m³/gün)'] = avg_debi
+                    plant_data[debi_col_name] = avg_debi
 
                     # --- Yıllık Yük Hesaplama Mantığı ---
                     # Yük parametrelerini ve hedef kolon adlarını tanımla (KOI ve KOİ için arama yap)
@@ -1437,14 +1465,171 @@ if uploaded_file:
             if summary_data:
                 summary_df = pd.DataFrame(summary_data)
                 # Tekrar eden satırları kaldır (her yıl için bir satır oluşmasını engelle)
-                summary_df = summary_df.groupby(['Tesis Adı', 'Grup']).first().reset_index()
+                summary_df = summary_df.groupby(['Tesis Adı', 'Grup', 'Sınıf']).first().reset_index()
                 summary_df = summary_df.sort_values(by=['Grup', 'Tesis Adı'])
                 
                 # Gruplara göre göster
                 for grup_adi, grup_df in summary_df.groupby('Grup'):
                     st.subheader(grup_adi)
-                    df_to_display = grup_df.drop(columns=['Grup']).set_index('Tesis Adı')
-                    st.dataframe(df_to_display.style.format(formatter="{:,.2f}", na_rep="-"), use_container_width=True)
+                    df_to_display = grup_df.drop(columns=['Grup', 'Sınıf']).set_index('Tesis Adı').copy()
+                    
+                    # Sadece sayısal sütunları seçerek toplam satırını hesapla
+                    numeric_cols = df_to_display.select_dtypes(include=np.number).columns
+                    totals = df_to_display[numeric_cols].sum()
+                    totals.name = "Toplam"
+                    
+                    # Toplam satırını DataFrame'e ekle
+                    df_to_display = pd.concat([df_to_display, pd.DataFrame(totals).T])
+                    
+                    # 'Toplam' satırını kalın yapmak için bir fonksiyon
+                    def bold_total(row):
+                        return ['font-weight: bold' if row.name == 'Toplam' else '' for _ in row]
+
+                    # Tablo yüksekliğini satır sayısına göre dinamik olarak ayarla (her satır ~35px)
+                    table_height = (len(df_to_display) + 1) * 35 + 3
+
+                    # Styler kullanarak tabloyu formatla ve göster
+                    # Sadece sayısal sütunları formatlamak için subset kullan
+                    st.dataframe(
+                        df_to_display.style.format(formatter="{:,.2f}", na_rep="-", subset=numeric_cols)
+                                         .apply(bold_total, axis=1), 
+                        use_container_width=True,
+                        height=table_height)
+                
+                # --- Yıllık Toplam Yük Karşılaştırma Bar Grafiği ---
+                if selected_years:
+                    st.subheader("Yıllara Göre Toplam Kirlilik Yükü Karşılaştırması")
+                    
+                    bar_chart_data = []
+                    load_types = {'Karbon Yükü': 'Karbon', 'Azot Yükü': 'Azot', 'Fosfor Yükü': 'Fosfor'}
+                    
+                    for year in selected_years:
+                        # Her grup için yükleri topla
+                        for grup_adi in ["Marmara Denizi'ne Deşarj", "İstanbul Boğazı'na Deşarj"]:
+                            grup_df = summary_df[summary_df['Grup'] == grup_adi]
+                            
+                            for load_name, short_name in load_types.items():
+                                col_name = f'{load_name} {year} (kg/gün)'
+                                if col_name in grup_df.columns:
+                                    total_load = grup_df[col_name].sum()
+                                    bar_chart_data.append({
+                                        'Yıl': year,
+                                        'Grup': grup_adi,
+                                        'Yük Tipi': short_name,
+                                        'Toplam Yük': total_load
+                                    })
+                    
+                    if bar_chart_data:
+                        bar_df = pd.DataFrame(bar_chart_data)
+                        
+                        fig_bar = go.Figure()
+                        
+                        # Her yük tipi için ayrı bir bar trace ekle
+                        colors = {'Karbon': '#1f77b4', 'Azot': '#ff7f0e', 'Fosfor': '#2ca02c'}
+                        for load_type, color in colors.items():
+                            df_subset = bar_df[bar_df['Yük Tipi'] == load_type]
+                            # Etiketler için metinleri formatla (ondalıksız)
+                            text_labels = [f'{y:,.0f}' for y in df_subset['Toplam Yük']]
+
+                            fig_bar.add_trace(go.Bar(
+                                x=[df_subset['Grup'], df_subset['Yıl']], # Çoklu kategori ekseni
+                                y=df_subset['Toplam Yük'],
+                                name=load_type,
+                                marker_color=color,
+                                text=text_labels,
+                                textposition='outside',
+                                cliponaxis=False # Etiketlerin grafik alanının dışına taşmasına izin ver
+                            ))
+                        
+                        fig_bar.update_layout(
+                            barmode='group',
+                            yaxis_title='Toplam Yük (kg/gün)',
+                            xaxis_title='Deşarj Noktası ve Yıl',
+                            uniformtext_minsize=8, 
+                            uniformtext_mode='hide'
+                        )
+                        
+                        fig_bar.update_traces(
+                            texttemplate='<b>%{text}</b>', # Metni kalın yapmak için HTML etiketi kullan
+                            textfont=dict(
+                                family="Arial, sans-serif",
+                                size=12
+                                # Renk, 'theme="streamlit"' tarafından otomatik yönetilecek
+                            )
+                        )
+                        st.plotly_chart(fig_bar, use_container_width=True, theme="streamlit")
+
+                # --- İnteraktif Pie Chart Bölümü ---
+                if selected_years:
+                    # Pie chart için en son seçilen yılı kullan
+                    last_selected_year = max(selected_years)
+                    debi_col_for_pie = next((col for col in summary_df.columns if f'Debi {last_selected_year}' in col), None)
+
+                    if debi_col_for_pie:
+                        # Sadece Marmara'ya deşarjı olan tesisleri al
+                        marmara_plants_df = summary_df[summary_df['Grup'] == "Marmara Denizi'ne Deşarj"].copy()
+                        available_plants_for_pie = sorted(marmara_plants_df['Tesis Adı'].unique())
+
+                        if available_plants_for_pie:
+                            col1, col2 = st.columns([3, 2]) # Grafiğe daha fazla yer ver
+
+                            with col2:
+                                st.markdown("#### Analize Dahil Edilecek Tesisler")
+                                st.markdown("Tesisleri seçerek grafiği güncelleyebilirsiniz:")
+
+                                selected_plants_for_pie = []
+                                # Checkbox'ları iki sütunda göstermek için
+                                checkbox_cols = st.columns(2)
+                                for i, plant in enumerate(available_plants_for_pie):
+                                    # Her bir checkbox'ı sırayla sütunlara yerleştir
+                                    with checkbox_cols[i % 2]:
+                                        if st.checkbox(plant, value=True, key=f"pie_plant_checkbox_{plant}"):
+                                            selected_plants_for_pie.append(plant)
+
+                                if not selected_plants_for_pie:
+                                    st.warning("Lütfen en az bir tesis seçin.")
+
+                            # Seçilen tesislere göre veriyi filtrele
+                            filtered_marmara_df = marmara_plants_df[marmara_plants_df['Tesis Adı'].isin(selected_plants_for_pie)]
+                            
+                            # Sınıflara göre debileri topla
+                            debi_by_class = filtered_marmara_df.groupby('Sınıf')[debi_col_for_pie].sum().reset_index()
+                            debi_by_class = debi_by_class[debi_by_class[debi_col_for_pie] > 0] # Debisi 0 olanları gösterme
+
+                            with col1:
+                                if not debi_by_class.empty:
+                                    # Modern bir görünüm için renk paleti ve ayarlar
+                                    colors = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A', '#19D3F3']
+                                    
+                                    fig_pie = go.Figure(data=[go.Pie(
+                                        labels=debi_by_class['Sınıf'],
+                                        values=debi_by_class[debi_col_for_pie],
+                                        textinfo='label+percent',
+                                        insidetextorientation='auto',
+                                        hole=.4,
+                                        marker=dict(
+                                            colors=colors, 
+                                            line=dict(color='#FFFFFF', width=2) # Dilimler arasına beyaz çizgi
+                                        ),
+                                        pull=[0.05] * len(debi_by_class['Sınıf']), # Dilimleri hafifçe ayır
+                                        hoverinfo='label+percent+value',
+                                        textfont_size=14,
+                                    )])
+                                    
+                                    fig_pie.update_layout(
+                                        title_text=f"<b>Marmara Denizi'ne Deşarj Oranları ({last_selected_year} Yılı Debilerine Göre)</b>",
+                                        title_x=0.5, # Başlığı ortala
+                                        height=500, # Grafik yüksekliğini artır
+                                        title_xanchor='center', # Başlığı x pozisyonuna göre ortala
+                                        legend_title_text="<b>Tesis Sınıfı</b>",
+                                        legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+                                        paper_bgcolor='rgba(0,0,0,0)', # Arka planı transparan yap
+                                        plot_bgcolor='rgba(0,0,0,0)'
+                                    )
+                                    st.plotly_chart(fig_pie, use_container_width=True)
+                                else:
+                                    st.warning("Seçilen tesislere ait gösterilecek veri bulunamadı.")
+                        
             else:
                 st.warning("Özet verisi oluşturulamadı.")
         else:
