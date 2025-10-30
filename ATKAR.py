@@ -1309,12 +1309,12 @@ if uploaded_file:
                 default=available_years
             )
 
-            for plant_name_original in all_marmara_plants:
+            for plant_name_original in all_marmara_plants: # Her tesis için döngü
+                # Her tesis için plant_data'yı sıfırla
                 plant_name_lower = plant_name_original.lower()
                 grup = tesis_gruplari.get(plant_name_lower, "Bilinmeyen Grup")
                 sinif = tesis_siniflari.get(plant_name_lower, "Bilinmeyen Sınıf")
                 plant_data = {'Tesis Adı': plant_name_original, 'Grup': grup, 'Sınıf': sinif}
-
                 for year in selected_years: # Sadece seçilen yıllar için döngüye gir
                     df_year = df_cleaned[df_cleaned.index.year == year]
                     if df_year.empty:
@@ -1373,105 +1373,175 @@ if uploaded_file:
                         if found_debi_col:
                             debi_series = df_year[found_debi_col]
 
-                    # --- Debi Veri Bütünlüğü Kontrolü ve Başlık Oluşturma ---
-                    days_in_year = pd.to_datetime(f'{year}-12-31').dayofyear
-                    data_count = debi_series.count()
-                    missing_days = days_in_year - data_count
+                    # **YENİ**: Sadece debi verisi varsa o yıl için işlem yap
+                    if not debi_series.empty and debi_series.count() > 0:
+                        # --- Debi Veri Bütünlüğü Kontrolü ve Başlık Oluşturma ---
+                        days_in_year = pd.to_datetime(f'{year}-12-31').dayofyear
+                        data_count = debi_series.count()
+                        missing_days = days_in_year - data_count
 
-                    debi_col_name = f'Debi {year} (m³/gün)'
-                    if data_count == 0:
-                        # Hiç veri yoksa
-                        debi_col_name = f'Debi {year} (m³/gün)' # İkon eklemeden bırak
-                    elif missing_days == 0:
-                        debi_col_name += " ✅" # Tam veri
-                    else:
-                        debi_col_name += f" ⚠️ ({missing_days} gün)" # Eksik veri
+                        debi_col_name = f'Debi {year} (m³/gün)'
+                        if data_count > 0 and missing_days == 0:
+                            debi_col_name += " ✅"
+                        elif data_count > 0:
+                            debi_col_name += f" ⚠️ ({missing_days} gün)"
 
-                    # Ortalama debiyi hesapla ve yeni başlıkla ekle
-                    avg_debi = debi_series.mean()
-                    plant_data[debi_col_name] = avg_debi
+                        avg_debi = debi_series.mean()
+                        plant_data[debi_col_name] = avg_debi
 
-                    # --- Yıllık Yük Hesaplama Mantığı ---
-                    # Yük parametrelerini ve hedef kolon adlarını tanımla (KOI ve KOİ için arama yap)
-                    load_params = {
-                        'Karbon Yükü': ['KOI', 'KOİ'],
-                        'Azot Yükü': ['TN'],
-                        'Fosfor Yükü': ['TP']
-                    }
+                        # --- Yıllık Yük Hesaplama Mantığı ---
+                        load_params = {
+                            'Karbon Yükü': ['KOI', 'KOİ'],
+                            'Azot Yükü': ['TN'],
+                            'Fosfor Yükü': ['TP']
+                        }
 
-                    is_bypass_plant = plant_name_original.endswith("Bypass")
+                        is_bypass_plant = plant_name_original.endswith("Bypass")
 
-                    for load_name, param_aliases in load_params.items():
-                        found_conc_col = None
-                        # Olası konsantrasyon kolon adlarını ara
-                        potential_conc_cols = []
-                        for alias in param_aliases:
-                            plant_parts = plant_name_original.split(' ')
-                            roman_numeral = plant_parts[-1] if len(plant_parts) > 1 and plant_parts[-1] in ["I", "II", "III"] else None
-
-                            if is_bypass_plant: # Bypass Tesisleri
-                                potential_conc_cols.extend([
-                                    f"{base_plant_name} {alias} Giriş",
-                                    f"{base_plant_name} {alias}"
-                                ])
-                            elif roman_numeral: # I, II, III'lü Tesisler
-                                potential_conc_cols.extend([
-                                    f"{plant_name_original} {alias} Çıkış",
-                                    f"{plant_name_original} {alias}",
-                                    f"{base_plant_name} {alias} Çıkış {roman_numeral}",
-                                    f"{base_plant_name} {alias} {roman_numeral}"
-                                ])
-                            else: # Standart Tesisler
-                                potential_conc_cols.extend([
-                                    f"{plant_name_original} {alias} Çıkış",
-                                    f"{plant_name_original} {alias}"
-                                ])
-                        
-                        for col_name in potential_conc_cols:
-                            if col_name in df_year.columns:
-                                found_conc_col = col_name
-                                break
-                        
-                        # Fallback: Eğer 'III' için kolon bulunamazsa, 'II'yi ara
-                        if not found_conc_col and plant_name_original.endswith(" III"):
-                            plant_ii_name = plant_name_original.replace(" III", " II")
-                            base_plant_name_ii = plant_ii_name.split(' ')[0]
-                            fallback_cols = []
+                        for load_name, param_aliases in load_params.items():
+                            found_conc_col = None
+                            potential_conc_cols = []
                             for alias in param_aliases:
-                                fallback_cols.extend([
-                                    f"{plant_ii_name} {alias} Çıkış",
-                                    f"{plant_ii_name} {alias}",
-                                    f"{base_plant_name_ii} {alias} Çıkış II",
-                                    f"{base_plant_name_ii} {alias} II"
-                                ])
-                            for col_name in fallback_cols:
+                                plant_parts = plant_name_original.split(' ')
+                                roman_numeral = plant_parts[-1] if len(plant_parts) > 1 and plant_parts[-1] in ["I", "II", "III"] else None
+
+                                if is_bypass_plant:
+                                    potential_conc_cols.extend([
+                                        f"{base_plant_name} {alias} Giriş",
+                                        f"{base_plant_name} {alias}"
+                                    ])
+                                elif roman_numeral:
+                                    potential_conc_cols.extend([
+                                        f"{plant_name_original} {alias} Çıkış",
+                                        f"{plant_name_original} {alias}",
+                                        f"{base_plant_name} {alias} Çıkış {roman_numeral}",
+                                        f"{base_plant_name} {alias} {roman_numeral}"
+                                    ])
+                                else:
+                                    potential_conc_cols.extend([
+                                        f"{plant_name_original} {alias} Çıkış",
+                                        f"{plant_name_original} {alias}"
+                                    ])
+
+                            for col_name in potential_conc_cols:
                                 if col_name in df_year.columns:
                                     found_conc_col = col_name
                                     break
 
-                        # Yükü hesapla ve veriye ekle
-                        if found_conc_col:
-                            avg_conc = df_year[found_conc_col].mean()
-                            load_value = (avg_debi * avg_conc) / 1000 if pd.notna(avg_debi) and pd.notna(avg_conc) else np.nan
-                            plant_data[f'{load_name} {year} (kg/gün)'] = load_value
-                        else:
-                            # Kolon bulunamazsa boş değer ata
-                            plant_data[f'{load_name} {year} (kg/gün)'] = np.nan
+                            if not found_conc_col and plant_name_original.endswith(" III"):
+                                plant_ii_name = plant_name_original.replace(" III", " II")
+                                base_plant_name_ii = plant_ii_name.split(' ')[0]
+                                fallback_cols = []
+                                for alias in param_aliases:
+                                    fallback_cols.extend([
+                                        f"{plant_ii_name} {alias} Çıkış",
+                                        f"{plant_ii_name} {alias}",
+                                        f"{base_plant_name_ii} {alias} Çıkış II",
+                                        f"{base_plant_name_ii} {alias} II"
+                                    ])
+                                for col_name in fallback_cols:
+                                    if col_name in df_year.columns:
+                                        found_conc_col = col_name
+                                        break
 
+                            if found_conc_col:
+                                avg_conc = df_year[found_conc_col].mean()
+                                if pd.notna(avg_debi) and pd.notna(avg_conc):
+                                    load_value = (avg_debi * avg_conc) / 1000
+                                    plant_data[f'{load_name} {year} (kg/gün)'] = load_value
+                        
+                        # --- YENİ: Yıllık GİDERİLEN Yük Hesaplama Mantığı ---
+                        removed_load_params = {
+                            'Giderilen Karbon Yükü': ('KOI', 'KOİ'),
+                            'Giderilen Azot Yükü': ('TN',),
+                            'Giderilen Fosfor Yükü': ('TP',)
+                        }
 
-                
+                        for removed_load_name, aliases in removed_load_params.items():
+                            # Çıkış konsantrasyonunu bul (zaten yukarıda bulundu)
+                            outlet_conc_col = None # Bu döngü için yeniden bul
+                            # ... (yukarıdaki çıkış konsantrasyonu bulma mantığı tekrar edilebilir veya saklanabilir)
+                            # Basitlik adına, çıkış yükü adından parametreyi çıkar
+                            param_name_base = removed_load_name.split(' ')[1] # Karbon, Azot, Fosfor
+                            outlet_load_name = f'{param_name_base} Yükü {year} (kg/gün)'
+                            
+                            # **YENİ**: Giriş konsantrasyonunu daha esnek bir şekilde bul
+                            inlet_conc_col = None
+                            plant_parts = plant_name_original.split(' ')
+                            roman_numeral = plant_parts[-1] if len(plant_parts) > 1 and plant_parts[-1] in ["I", "II", "III"] else None
+
+                            potential_inlet_cols = []
+                            for alias in aliases:
+                                # Öncelik: Kademeye özel girişler (örn: "Tuzla I KOI Giriş" veya "Tuzla KOI Giriş I")
+                                if roman_numeral:
+                                    potential_inlet_cols.append(f"{plant_name_original} {alias} Giriş")
+                                    potential_inlet_cols.append(f"{base_plant_name} {alias} Giriş {roman_numeral}")
+                                # Fallback: Ortak giriş (örn: "Tuzla KOI Giriş")
+                                potential_inlet_cols.append(f"{base_plant_name} {alias} Giriş")
+                                potential_inlet_cols.append(f"{plant_name_original} {alias} Giriş") # Standart tesisler için
+                            
+                            # Potansiyel kolonları sırayla kontrol et
+                            for col in potential_inlet_cols:
+                                if col in df_year.columns:
+                                    inlet_conc_col = col
+                                    break
+
+                            if inlet_conc_col and outlet_load_name in plant_data and pd.notna(plant_data[outlet_load_name]):
+                                avg_conc_inlet = df_year[inlet_conc_col].mean()
+                                # Çıkış konsantrasyonunu yükten geri hesapla
+                                avg_conc_outlet = (plant_data[outlet_load_name] * 1000) / avg_debi if avg_debi > 0 else 0
+
+                                if pd.notna(avg_debi) and pd.notna(avg_conc_inlet) and pd.notna(avg_conc_outlet):
+                                    # Giderilen yük negatif olamaz (giriş çıkıştan küçükse 0 kabul et)
+                                    removed_load = (avg_debi * max(0, avg_conc_inlet - avg_conc_outlet)) / 1000
+                                    plant_data[f'{removed_load_name} {year} (kg/gün)'] = removed_load
+
                 summary_data.append(plant_data)
             
             if summary_data:
                 summary_df = pd.DataFrame(summary_data)
-                # Tekrar eden satırları kaldır (her yıl için bir satır oluşmasını engelle)
-                summary_df = summary_df.groupby(['Tesis Adı', 'Grup', 'Sınıf']).first().reset_index()
+
+                # **YENİ**: Sütunları mantıksal olarak sırala (Yıl > Parametre Tipi)
+                static_cols = ['Tesis Adı', 'Grup', 'Sınıf']
+                dynamic_cols = [col for col in summary_df.columns if col not in static_cols]
+
+                def sort_key(col_name):
+                    import re
+                    year_match = re.search(r'(\d{4})', col_name)
+                    year = int(year_match.group(1)) if year_match else 9999
+                    
+                    if 'Debi' in col_name:
+                        order = 0
+                    elif 'Giderilen Karbon' in col_name:
+                        order = 1
+                    elif 'Karbon Yükü' in col_name:
+                        order = 2
+                    elif 'Giderilen Azot' in col_name:
+                        order = 3
+                    elif 'Azot Yükü' in col_name:
+                        order = 4
+                    elif 'Giderilen Fosfor' in col_name:
+                        order = 5
+                    elif 'Fosfor Yükü' in col_name:
+                        order = 6
+                    else:
+                        order = 7
+                    return (year, order)
+
+                sorted_dynamic_cols = sorted(dynamic_cols, key=sort_key)
+                summary_df = summary_df[static_cols + sorted_dynamic_cols]
+
                 summary_df = summary_df.sort_values(by=['Grup', 'Tesis Adı'])
                 
                 # Gruplara göre göster
                 for grup_adi, grup_df in summary_df.groupby('Grup'):
-                    st.subheader(grup_adi)
-                    df_to_display = grup_df.drop(columns=['Grup', 'Sınıf']).set_index('Tesis Adı').copy()
+                    st.subheader(f"{grup_adi} - Deşarj Yükleri")
+                    
+                    # **DÜZELTME**: Bu tabloda sadece deşarj yüklerini göster, giderilenleri filtrele
+                    display_cols = [col for col in grup_df.columns if 'Giderilen' not in col]
+                    df_to_display = grup_df[display_cols].drop(columns=['Grup', 'Sınıf']).set_index('Tesis Adı').copy()
+                    
+                    if df_to_display.empty: continue
                     
                     # Sadece sayısal sütunları seçerek toplam satırını hesapla
                     numeric_cols = df_to_display.select_dtypes(include=np.number).columns
@@ -1559,6 +1629,70 @@ if uploaded_file:
                         )
                         st.plotly_chart(fig_bar, use_container_width=True, theme="streamlit")
 
+                # --- YENİ: Sınıf Bazlı Yüzdesel Deşarj Oranları Bar Grafiği ---
+                if selected_years:
+                    st.subheader("Yıllara Göre Sınıf Bazlı Deşarj Oranları (%)")
+                    
+                    percentage_data = []
+                    all_classes = sorted(summary_df['Sınıf'].unique())
+
+                    for year in selected_years:
+                        # Yıla ait debi kolonunu bul (ikonlu olabilir)
+                        debi_col = next((col for col in summary_df.columns if f'Debi {year}' in col), None)
+                        
+                        if debi_col:
+                            for grup_adi in ["Marmara Denizi'ne Deşarj", "İstanbul Boğazı'na Deşarj"]:
+                                # Grup ve yıl için veriyi filtrele
+                                grup_year_df = summary_df[(summary_df['Grup'] == grup_adi) & (summary_df[debi_col].notna())].copy()
+                                
+                                if not grup_year_df.empty:
+                                    # Sınıflara göre debileri topla
+                                    debi_by_class = grup_year_df.groupby('Sınıf')[debi_col].sum()
+                                    total_debi_for_group = debi_by_class.sum()
+
+                                    if total_debi_for_group > 0:
+                                        # Bu grup için hesaplanan yüzdeleri ekle
+                                        for sinif in debi_by_class.index:
+                                            percentage = (debi_by_class[sinif] / total_debi_for_group) * 100
+                                            percentage_data.append({'Yıl': year, 'Grup': grup_adi, 'Sınıf': sinif, 'Yüzde': percentage})
+                                
+                                # **YENİ**: Eğer bir grup için hiç veri bulunamadıysa, tüm sınıflar için %0'lık kayıtlar ekle.
+                                # Bu, grafikte grubun kaybolmasını engeller.
+                                else:
+                                    for sinif in all_classes:
+                                        percentage_data.append({
+                                            'Yıl': year,
+                                            'Grup': grup_adi,
+                                            'Sınıf': sinif,
+                                            'Yüzde': 0
+                                        })
+
+                    if percentage_data:
+                        percentage_df = pd.DataFrame(percentage_data)
+                        fig_percentage_bar = go.Figure()
+
+                        # Her sınıf için ayrı bir bar trace ekle (yığılmış grafik için)
+                        class_colors = {'İleri Biyolojik': '#00CC96', 'Biyolojik': '#636EFA', 'Ön Arıtma': '#EF553B', 'Diğer': '#AB63FA'}
+                        
+                        for sinif in all_classes:
+                            df_subset = percentage_df[percentage_df['Sınıf'] == sinif]
+                            fig_percentage_bar.add_trace(go.Bar(
+                                x=[df_subset['Grup'], df_subset['Yıl']],
+                                y=df_subset['Yüzde'],
+                                name=sinif,
+                                marker_color=class_colors.get(sinif, '#7f7f7f'),
+                                text=df_subset['Yüzde'].apply(lambda x: f'{x:.1f}%' if x > 0 else ''),
+                                textposition='inside'
+                            ))
+
+                        fig_percentage_bar.update_layout(
+                            barmode='stack',
+                            title_text="Sınıfların Toplam Deşarjdaki Payı",
+                            yaxis_title="Yüzdelik Oran (%)",
+                            xaxis_title="Deşarj Noktası ve Yıl"
+                        )
+                        st.plotly_chart(fig_percentage_bar, use_container_width=True, theme="streamlit")
+
                 # --- İnteraktif Pie Chart Bölümü ---
                 if selected_years:
                     # Pie chart için en son seçilen yılı kullan
@@ -1630,6 +1764,96 @@ if uploaded_file:
                                 else:
                                     st.warning("Seçilen tesislere ait gösterilecek veri bulunamadı.")
                         
+                # --- YENİ: Giderilen Yükler Tablosu ve Grafiği ---
+                st.markdown("---")
+                st.header("Giderilen Kirlilik Yükleri Analizi")
+                st.info("Bu bölümde, tesislerin arıtma verimliliği (`Giriş Konsantrasyonu - Çıkış Konsantrasyonu` formülü ile) sonucunda giderilen günlük kirlilik yükleri gösterilmektedir.")
+
+                # Giderilen yük kolonlarını bul
+                removed_load_cols = [col for col in summary_df.columns if 'Giderilen' in col]
+
+                if removed_load_cols:
+                    # **YENİ**: Bypass tesislerini bu analizden çıkar
+                    summary_df_no_bypass = summary_df[~summary_df['Tesis Adı'].str.endswith("Bypass")].copy()
+
+                    # Giderilen Yükler Tablosu
+                    df_removed_table = summary_df_no_bypass[['Tesis Adı', 'Grup', 'Sınıf'] + removed_load_cols]
+
+                    for grup_adi, grup_df in df_removed_table.groupby('Grup'):
+                        st.subheader(f"{grup_adi} - Giderilen Yükler")
+                        df_to_display = grup_df.drop(columns=['Grup', 'Sınıf']).set_index('Tesis Adı').copy()
+                        
+                        numeric_cols = df_to_display.select_dtypes(include=np.number).columns
+                        if not numeric_cols.empty:
+                            totals = df_to_display[numeric_cols].sum()
+                            totals.name = "Toplam"
+                            df_to_display = pd.concat([df_to_display, pd.DataFrame(totals).T])
+
+                            table_height = (len(df_to_display) + 1) * 35 + 3
+                            st.dataframe(
+                                df_to_display.style.format(formatter="{:,.2f}", na_rep="-", subset=numeric_cols)
+                                                 .apply(lambda row: ['font-weight: bold' if row.name == 'Toplam' else '' for _ in row], axis=1),
+                                use_container_width=True,
+                                height=table_height
+                            )
+
+                    # Giderilen Yükler Bar Grafiği
+                    st.subheader("Yıllara Göre Toplam Giderilen Kirlilik Yükü")
+                    removed_bar_data = []
+                    removed_load_types = {'Giderilen Karbon Yükü': 'Karbon', 'Giderilen Azot Yükü': 'Azot', 'Giderilen Fosfor Yükü': 'Fosfor'}
+
+                    for year in selected_years:
+                        for grup_adi in ["Marmara Denizi'ne Deşarj", "İstanbul Boğazı'na Deşarj"]:
+                            grup_df = summary_df_no_bypass[summary_df_no_bypass['Grup'] == grup_adi]
+                            has_data_for_group = False
+                            for load_name, short_name in removed_load_types.items():
+                                col_name = f'{load_name} {year} (kg/gün)'
+                                if col_name in grup_df.columns:
+                                    total_load = grup_df[col_name].sum()
+                                    if total_load > 0:
+                                        has_data_for_group = True
+                                        removed_bar_data.append({
+                                            'Yıl': year, 'Grup': grup_adi, 'Yük Tipi': short_name, 'Toplam Giderilen Yük': total_load
+                                        })
+                            
+                            # **YENİ**: Eğer grup için hiç veri yoksa, grafikte görünmesi için 0'lık kayıt ekle
+                            if not has_data_for_group:
+                                for load_name, short_name in removed_load_types.items():
+                                    removed_bar_data.append({'Yıl': year, 'Grup': grup_adi, 'Yük Tipi': short_name, 'Toplam Giderilen Yük': 0})
+                    
+                    if removed_bar_data:
+                        removed_bar_df = pd.DataFrame(removed_bar_data)
+                        fig_removed_bar = go.Figure()
+                        colors = {'Karbon': '#1f77b4', 'Azot': '#ff7f0e', 'Fosfor': '#2ca02c'}
+
+                        for load_type, color in colors.items():
+                            df_subset = removed_bar_df[removed_bar_df['Yük Tipi'] == load_type]
+                            if not df_subset.empty:
+                                text_labels = [f'{y:,.0f}' for y in df_subset['Toplam Giderilen Yük']]
+                                fig_removed_bar.add_trace(go.Bar(
+                                    x=[df_subset['Grup'], df_subset['Yıl']],
+                                    y=df_subset['Toplam Giderilen Yük'],
+                                    name=load_type,
+                                    marker_color=color,
+                                    text=text_labels,
+                                    textposition='outside',
+                                    cliponaxis=False
+                                ))
+                        
+                        fig_removed_bar.update_layout(
+                            barmode='group',
+                            yaxis_title='Toplam Giderilen Yük (kg/gün)',
+                            xaxis_title='Deşarj Noktası ve Yıl',
+                            legend_title_text="Yük Tipi"
+                        )
+                        fig_removed_bar.update_traces(
+                            texttemplate='<b>%{text}</b>',
+                            textfont=dict(size=12)
+                        )
+                        st.plotly_chart(fig_removed_bar, use_container_width=True, theme="streamlit")
+                else:
+                    st.warning("Hesaplanacak 'Giderilen Yük' verisi bulunamadı. Lütfen Excel dosyanızda tesisler için 'Giriş' konsantrasyon verilerinin ('Tesis Adı KOI Giriş' vb.) bulunduğundan emin olun.")
+
             else:
                 st.warning("Özet verisi oluşturulamadı.")
         else:
