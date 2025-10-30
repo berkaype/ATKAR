@@ -446,7 +446,7 @@ if uploaded_file:
         df_cleaned.interpolate(method='linear', limit_direction='both', inplace=True)
 
     # --- Sekmeleri Oluştur ---
-    tabs = st.tabs(["Veri Görselleştirme ve Karşılaştırma", "Zaman Serisi Tahmini (LSTM)", "Kirlilik Yükleri Deşarj Noktaları"])
+    tabs = st.tabs(["Veri Görselleştirme ve Karşılaştırma", "Zaman Serisi Tahmini (LSTM)", "Kirlilik Yükleri ve Harita"])
     tab1, tab2, tab3 = tabs[0], tabs[1], tabs[2]
 
     # ============================ SEKME 1: GÖRSELLEŞTİRME ============================
@@ -1247,7 +1247,7 @@ if uploaded_file:
 
     # ============================ SEKME 3: KİRLİLİK YÜKLERİ ============================
     with tab3:
-        st.header("Kirlilik Yükleri ve Deşarj Noktaları Analizi")
+        st.header("Kirlilik Yükleri, Deşarj Noktaları ve Harita Analizi")
 
         if df_marmara is None:
             st.warning("Bu analizi yapabilmek için lütfen Excel dosyanızda 'Marmara' adında bir sayfa bulunduğundan emin olun.")
@@ -1267,11 +1267,13 @@ if uploaded_file:
             expected_tesis_col = 'tesis adı'
             expected_etki_col = 'marmaraya etkisi'
             expected_sinif_col = 'sınıf' # Yeni sınıf kolonu
+            expected_lat_col = 'enlem' # Yeni enlem kolonu
+            expected_lon_col = 'boylam' # Yeni boylam kolonu
 
-            if not all(col in df_marmara.columns for col in [expected_tesis_col, expected_etki_col, expected_sinif_col]):
+            if not all(col in df_marmara.columns for col in [expected_tesis_col, expected_etki_col, expected_sinif_col, expected_lat_col, expected_lon_col]):
                 raise ValueError(
-                    f"'{expected_tesis_col.title()}', '{expected_etki_col.title()}' veya '{expected_sinif_col.title()}' "
-                    f"sütunlarından biri 'Marmara' sayfasında bulunamadı. "
+                    f"'{expected_tesis_col.title()}', '{expected_etki_col.title()}', '{expected_sinif_col.title()}', "
+                    f"'{expected_lat_col.title()}' veya '{expected_lon_col.title()}' sütunlarından biri 'Marmara' sayfasında bulunamadı. "
                     f"Mevcut sütunlar: {', '.join(df_marmara.columns.tolist())}"
                 )
 
@@ -1286,6 +1288,15 @@ if uploaded_file:
             tesis_siniflari = {
                 str(row[expected_tesis_col]).strip().lower(): str(row[expected_sinif_col]).strip()
                 for _, row in df_marmara.iterrows() if pd.notna(row[expected_sinif_col])
+            }
+            # Konum verilerini oku
+            tesis_konumlari = {
+                str(row[expected_tesis_col]).strip(): {
+                    'enlem': row[expected_lat_col],
+                    'boylam': row[expected_lon_col]
+                }
+                for _, row in df_marmara.iterrows() 
+                if pd.notna(row[expected_lat_col]) and pd.notna(row[expected_lon_col])
             }
 
         except Exception as e:
@@ -1853,6 +1864,127 @@ if uploaded_file:
                         st.plotly_chart(fig_removed_bar, use_container_width=True, theme="streamlit")
                 else:
                     st.warning("Hesaplanacak 'Giderilen Yük' verisi bulunamadı. Lütfen Excel dosyanızda tesisler için 'Giriş' konsantrasyon verilerinin ('Tesis Adı KOI Giriş' vb.) bulunduğundan emin olun.")
+
+                # ============================ HARİTA GÖRSELLEŞTİRMESİ (SEKME 3'e TAŞINDI) ============================
+                st.markdown("---")
+                st.header("Deşarj Yüklerinin Harita Üzerinde Gösterimi")
+
+                if not tesis_konumlari:
+                    st.error("Excel dosyanızın 'Marmara' sayfasında 'Enlem' ve 'Boylam' sütunları bulunamadı veya boş. Harita gösterilemiyor.")
+                else:
+                    st.info("Bu harita, seçilen yıla göre tesis gruplarının toplam deşarj büyüklüklerini ve dominant kirletici tipini göstermektedir. Benzer isimli tesisler (örn: Tuzla I, Tuzla II) tek bir noktada toplanmıştır.")
+
+                    col1, col2, col3, col4 = st.columns(4)
+                    with col1:
+                        map_year = st.selectbox(
+                            "Yıl Seçin",
+                            options=sorted(available_years, reverse=True),
+                            key="map_year"
+                        )
+                    # YENİ: Yük tipi seçimi için checkbox'lar
+                    with col2:
+                        show_carbon = st.checkbox("Karbon Yükü", value=True, key="map_show_c")
+                    with col3:
+                        show_nitrogen = st.checkbox("Azot Yükü", value=True, key="map_show_n")
+                    with col4:
+                        show_phosphorus = st.checkbox("Fosfor Yükü", value=True, key="map_show_p")
+
+                    # Geliştirme kolaylığı için token doğrudan koda eklendi.
+                    mapbox_token = "pk.eyJ1IjoiYmVya2F5cGUiLCJhIjoiY21oZGNkMjZiMDE5MDJqc2JyYThxbWR5ZiJ9.Y5C2cgPCFKE16BKmxh_AWg"
+                    selected_loads = {'Karbon': show_carbon, 'Azot': show_nitrogen, 'Fosfor': show_phosphorus}
+
+                    # Veri Agregasyonu
+                    summary_df['Ana Tesis'] = summary_df['Tesis Adı'].apply(lambda x: x.split(' ')[0])
+
+                    # Seçilen yıla göre ilgili yük kolonlarını bul
+                    carbon_col = next((col for col in summary_df.columns if f'Karbon Yükü {map_year}' in col), None)
+                    nitrogen_col = next((col for col in summary_df.columns if f'Azot Yükü {map_year}' in col), None)
+                    phosphorus_col = next((col for col in summary_df.columns if f'Fosfor Yükü {map_year}' in col), None)
+
+                    if not all([carbon_col, nitrogen_col, phosphorus_col]):
+                        st.warning(f"{map_year} yılı için Karbon, Azot veya Fosfor yük verilerinden biri bulunamadı.")
+                    else:
+                        # Ana tesise göre grupla ve yükleri topla
+                        agg_df = summary_df.groupby('Ana Tesis').agg(
+                            Karbon_Yuku=(carbon_col, 'sum'),
+                            Azot_Yuku=(nitrogen_col, 'sum'),
+                            Fosfor_Yuku=(phosphorus_col, 'sum'),
+                            Grup=('Grup', 'first'),
+                            Alt_Tesisler=('Tesis Adı', lambda x: ', '.join(x))
+                        ).reset_index()
+
+
+                        # Konum bilgilerini ekle
+                        def get_location(row):
+                            if row['Ana Tesis'] in tesis_konumlari:
+                                return tesis_konumlari[row['Ana Tesis']]
+                            for tesis in row['Alt_Tesisler'].split(', '):
+                                if tesis in tesis_konumlari:
+                                    return tesis_konumlari[tesis]
+                            return {'enlem': None, 'boylam': None}
+
+                        agg_df['Konum'] = agg_df.apply(get_location, axis=1)
+                        agg_df['Enlem'] = agg_df['Konum'].apply(lambda x: x['enlem'])
+                        agg_df['Boylam'] = agg_df['Konum'].apply(lambda x: x['boylam'])
+                        agg_df.dropna(subset=['Enlem', 'Boylam'], inplace=True)
+
+                        if agg_df.empty:
+                            st.warning("Haritada gösterilecek veri bulunamadı.")
+                        else:
+                            fig_map = go.Figure()
+                            load_info = {
+                                'Karbon': {'col': 'Karbon_Yuku', 'color': '#1f77b4'}, # Mavi
+                                'Azot': {'col': 'Azot_Yuku', 'color': '#006400'},   # Koyu Yeşil
+                                'Fosfor': {'col': 'Fosfor_Yuku', 'color': '#9467bd'}  # Mor
+                            }
+
+                            # Boyutlandırma için maksimum yükü bul
+                            max_load_value_sqrt = np.sqrt(agg_df[['Karbon_Yuku', 'Azot_Yuku', 'Fosfor_Yuku']].max().max())
+                            max_marker_size = 80 # Haritadaki en büyük dairenin piksel boyutu
+
+                            # Her bir yük tipi için ayrı katmanlar çiz (filtrelemenin doğru çalışması için)
+                            for load_name, info in load_info.items():
+                                if selected_loads[load_name]:
+                                    # O yüke ait verisi olan tesisleri filtrele
+                                    df_filtered = agg_df[agg_df[info['col']] > 0].copy()
+                                    
+                                    if not df_filtered.empty:
+                                        # **YENİ**: Orantılı boyutlandırma
+                                        # Karekök ölçeklemesi ile küçük değerleri daha görünür yap
+                                        df_filtered['marker_size'] = (np.sqrt(df_filtered[info['col']]) / max_load_value_sqrt) * max_marker_size
+
+                                        fig_map.add_trace(go.Scattermapbox(
+                                            lat=df_filtered['Enlem'],
+                                            lon=df_filtered['Boylam'],
+                                            mode='markers',
+                                            marker=go.scattermapbox.Marker(
+                                                size=df_filtered['marker_size'],
+                                                color=info['color'],
+                                                sizemin=4, # Çok küçük yükler için minimum boyut
+                                                opacity=0.6
+                                            ),
+                                            hoverinfo='text',
+                                            text=df_filtered.apply(lambda row: f"<b>{row['Ana Tesis']}</b><br>"
+                                                                                f"Grup: {row['Grup']}<br><br>"
+                                                                                f"Karbon: {row['Karbon_Yuku']:,.0f} kg/gün<br>"
+                                                                                f"Azot: {row['Azot_Yuku']:,.0f} kg/gün<br>"
+                                                                                f"Fosfor: {row['Fosfor_Yuku']:,.0f} kg/gün<br>"
+                                                                                f"<small>İçerilen Tesisler: {row['Alt_Tesisler']}</small>", axis=1),
+                                            name=load_name
+                                        ))
+
+                            fig_map.update_layout(
+                                title=f'{map_year} Yılı Deşarj Yükleri Dağılımı',
+                                mapbox=dict(
+                                    accesstoken=mapbox_token,
+                                    style='satellite-streets',
+                                    center=dict(lat=41.01, lon=28.97),
+                                    zoom=8.2
+                                ),
+                                margin={"r":0,"t":40,"l":0,"b":0},
+                                legend_title_text="Kirletici Tipi"
+                            )
+                            st.plotly_chart(fig_map, use_container_width=True)
 
             else:
                 st.warning("Özet verisi oluşturulamadı.")
