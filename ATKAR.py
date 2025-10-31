@@ -220,15 +220,21 @@ def create_yearly_subplots(df, selected_params, years, chart_types_for_params, o
             else:
                 trace_args['line'] = dict(color=color)
             
-            if show_labels and chart_type != "Çubuk (Bar)":
-                trace_args['mode'] = 'lines+markers+text'
-                trace_args['text'] = [format_number(val, decimal_separator, False) if not pd.isna(val) else "" for val in year_data[param]]
-                trace_args['textposition'] = 'top center'
-                trace_args['textfont'] = dict(size=8)
-            elif chart_type != "Çubuk (Bar)":
+            if chart_type == "Çizgi (Line)":
                 trace_args['mode'] = 'lines'
-                
-            if chart_type == "Çizgi (Line)" or chart_type == "Nokta (Scatter)":
+                if show_labels:
+                    trace_args['mode'] += '+markers+text'
+                    trace_args['text'] = [format_number(val, decimal_separator, False) if not pd.isna(val) else "" for val in year_data[param]]
+                    trace_args['textposition'] = 'top center'
+                    trace_args['textfont'] = dict(size=8)
+                fig.add_trace(go.Scatter(**trace_args), row=i+1, col=1, secondary_y=secondary_y)
+            elif chart_type == "Nokta (Scatter)":
+                trace_args['mode'] = 'markers'
+                if show_labels:
+                    trace_args['mode'] += '+text'
+                    trace_args['text'] = [format_number(val, decimal_separator, False) if not pd.isna(val) else "" for val in year_data[param]]
+                    trace_args['textposition'] = 'top center'
+                    trace_args['textfont'] = dict(size=8)
                 fig.add_trace(go.Scatter(**trace_args), row=i+1, col=1, secondary_y=secondary_y)
             elif chart_type == "Çubuk (Bar)":
                 fig.add_trace(go.Bar(**trace_args), row=i+1, col=1, secondary_y=secondary_y)
@@ -584,16 +590,21 @@ if uploaded_file:
                         'opacity': opacity
                     }
                     
-                    # Bar chart için text modunu kaldır
-                    if show_labels and chart_type != "Çubuk (Bar)":
-                        trace_args['mode'] = 'lines+markers+text'
-                        trace_args['text'] = [format_number(val, decimal_separator, False) if not pd.isna(val) else "" for val in df_resampled[param]]
-                        trace_args['textposition'] = 'top center'
-                        trace_args['textfont'] = dict(size=8)
-                    elif chart_type != "Çubuk (Bar)":
+                    if chart_type == "Çizgi (Line)":
                         trace_args['mode'] = 'lines'
-                    
-                    if chart_type == "Çizgi (Line)" or chart_type == "Nokta (Scatter)":
+                        if show_labels:
+                            trace_args['mode'] += '+markers+text'
+                            trace_args['text'] = [format_number(val, decimal_separator, False) if not pd.isna(val) else "" for val in df_resampled[param]]
+                            trace_args['textposition'] = 'top center'
+                            trace_args['textfont'] = dict(size=8)
+                        fig.add_trace(go.Scatter(**trace_args))
+                    elif chart_type == "Nokta (Scatter)":
+                        trace_args['mode'] = 'markers'
+                        if show_labels:
+                            trace_args['mode'] += '+text'
+                            trace_args['text'] = [format_number(val, decimal_separator, False) if not pd.isna(val) else "" for val in df_resampled[param]]
+                            trace_args['textposition'] = 'top center'
+                            trace_args['textfont'] = dict(size=8)
                         fig.add_trace(go.Scatter(**trace_args))
                     elif chart_type == "Çubuk (Bar)":
                         # Bar için mode parametresini kaldır
