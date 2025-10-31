@@ -1865,7 +1865,7 @@ if uploaded_file:
                 else:
                     st.warning("Hesaplanacak 'Giderilen Yük' verisi bulunamadı. Lütfen Excel dosyanızda tesisler için 'Giriş' konsantrasyon verilerinin ('Tesis Adı KOI Giriş' vb.) bulunduğundan emin olun.")
 
-                # ============================ HARİTA GÖRSELLEŞTİRMESİ (SEKME 3'e TAŞINDI) ============================
+                # ============================ HARİTA GÖRSELLEŞTİRMESİ ============================
                 st.markdown("---")
                 st.header("Deşarj Yüklerinin Harita Üzerinde Gösterimi")
 
@@ -1879,15 +1879,15 @@ if uploaded_file:
                         map_year = st.selectbox(
                             "Yıl Seçin",
                             options=sorted(available_years, reverse=True),
-                            key="map_year"
+                            key="map_year_tab3"
                         )
                     # YENİ: Yük tipi seçimi için checkbox'lar
                     with col2:
-                        show_carbon = st.checkbox("Karbon Yükü", value=True, key="map_show_c")
+                        show_carbon = st.checkbox("Karbon Yükü", value=True, key="map_show_c_tab3")
                     with col3:
-                        show_nitrogen = st.checkbox("Azot Yükü", value=True, key="map_show_n")
+                        show_nitrogen = st.checkbox("Azot Yükü", value=True, key="map_show_n_tab3")
                     with col4:
-                        show_phosphorus = st.checkbox("Fosfor Yükü", value=True, key="map_show_p")
+                        show_phosphorus = st.checkbox("Fosfor Yükü", value=True, key="map_show_p_tab3")
 
                     # Geliştirme kolaylığı için token doğrudan koda eklendi.
                     mapbox_token = "pk.eyJ1IjoiYmVya2F5cGUiLCJhIjoiY21oZGNkMjZiMDE5MDJqc2JyYThxbWR5ZiJ9.Y5C2cgPCFKE16BKmxh_AWg"
